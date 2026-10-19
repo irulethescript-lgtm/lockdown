@@ -267,6 +267,7 @@ router.post('/gang/transfer', ...act(async (user, req, res) => {
 
 // ── BANK ─────────────────────────────────────────────────
 router.post('/gang/deposit', ...act(async (user, req, res) => {
+  if(user.in_hospital || user.in_jail)return res.json({error:'You cannot deposit faction money while in hospital or jail.'});
   const gang = await membership(user.id);
   if (!gang) return res.json({ error: 'Not in a gang.' });
   const amount = parseAmount(req.body.amount);

@@ -34,7 +34,7 @@ router.post('/register', async (req, res) => {
   if (existing) return res.render('register', { error: 'Username already taken.' });
   const hash = bcrypt.hashSync(password, 10);
   try {
-    const result = await run('INSERT INTO users (username, password) VALUES (?,?)', [username.trim(), hash]);
+    const result = await run('INSERT INTO users (username, password, avatar) VALUES (?,?,?)', [username.trim(), hash, JSON.stringify(require('../middleware/avatardata').DEFAULT_AVATAR)]);
     req.session.userId = result.lastID;
     res.redirect('/city');
   } catch(e) {

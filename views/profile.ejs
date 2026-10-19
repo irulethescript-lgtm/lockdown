@@ -55,14 +55,8 @@
       <!-- Avatar -->
       <div class="rap-avatar">
         <%
-          let rapLayers = [];
-          if (profile.avatar) {
-            try {
-              const av = JSON.parse(profile.avatar);
-              rapLayers = Object.values(av).filter(v => v && v !== 'none');
-            } catch(e) {}
-          }
-        %>
+          const rapLayers = avatarImages(profile.avatar);
+%>
         <% if (rapLayers.length > 0) { %>
           <% rapLayers.forEach(src => { %>
             <img src="<%= src %>" style="position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none'">
@@ -127,9 +121,6 @@
       </a>
       <a class="rap-action" href="/spy/<%= profile.username %>">
         <span style="font-size:24px;">🔍</span><span>SPY</span>
-      </a>
-      <a class="rap-action" href="/raid/<%= profile.username %>">
-        <span style="font-size:24px;">🏚️</span><span>RAID</span>
       </a>
       <% } else { %>
       <span class="rap-action" style="opacity:0.35;cursor:not-allowed;" title="Different city">⚔️ ATTACK</span>

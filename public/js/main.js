@@ -58,6 +58,7 @@ function updateStats(u) {
     const text=document.getElementById('travelNoticeText');
     if(text)text.textContent=u.travel.phase==='outbound'?'You are travelling to another city.':u.travel.phase==='returning'?'You are travelling home with your cargo.':'You are visiting another city. Return home to use home facilities.';
   }
+  if(u.cooldowns) for(const key of ['medical','drug']){const n=document.getElementById('header-'+key);if(n)n.dataset.timer=u.cooldowns.find(c=>c.category===key)?.ready_at||0;}
   document.dispatchEvent(new CustomEvent('player:updated', { detail: u }));
 }
 

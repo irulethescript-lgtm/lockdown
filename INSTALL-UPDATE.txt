@@ -1,0 +1,57 @@
+LOCKDOWN — UPDATED FILES
+
+This is an update for your existing Lockdown game folder.
+It includes all source changes from this task, the market/inventory update,
+all 1,509 catalog entries, with 1,507 source images and two labeled placeholders.
+
+INSTALL
+1. Stop your game server.
+2. Back up your existing game folder, especially the db folder.
+3. Extract this ZIP into your existing game folder. Allow these files to overwrite
+   the matching files. server.js must remain in the root of your game folder.
+4. Keep your existing db folder and all original image folders. This ZIP contains
+   no player database and does not replace your saved accounts.
+5. Use Node.js 22 or newer. In the game folder run:
+     npm ci
+     npm start
+   Install dependencies on the computer running the game. Do not copy node_modules
+   between Windows and Linux.
+6. Open http://localhost:3000 (or your existing server address).
+
+NOTES
+- Casino: nine level-gated games, 75 separate Casino Tokens daily, refills,
+  two-player poker/roulette, lottery, points and awards. See README for rules.
+  Live Bookie events require trusted operator fixtures/results; no feed is bundled.
+- Medical: stacking cooldowns, percentage healing/hospital relief, blood bags,
+  Opium, medical education, Brain Surgeon revives and faction medical upgrades.
+  See README for supported mechanics and progression rules.
+- City now opens the interactive city map. Home opens the original overview.
+- Compact sidebar labels and sections follow the supplied reference.
+- Daily city finds: 35% chance per player per UTC day; collect on the map.
+- Old avatar parts and starter characters are removed. Only imported parts remain.
+  To remove unused artwork from an existing install, delete public/avatars/heads,
+  noses, eyes, eyebrows, mouths, hair, hats, tattoos and extras subfolders.
+  KEEP public/avatars/imported. Delete public/js/starters.js if present.
+- New: shared rotating home stock, restocked hourly; ten overseas destinations
+  with fixed 12-item shops, hourly restocks and rare limited-time offers.
+- New: buy homes, move in, and add furnishings without a tile grid.
+- Permanent relocation is disabled. Use the Airport for return trips.
+- Existing money, home location, jobs, owned items and placed furnishings are
+  preserved. Startup adds rotating_stock and owned_homes tables automatically.
+- Displayed Torn branding has been replaced by Lock down; original source data,
+  filenames and inventory keys are retained for save compatibility.
+- Keep your production SESSION_SECRET and PORT settings.
+- Startup applies the existing database migrations automatically.
+- Market and inventory: /market and /inventory.
+- Names, IDs, categories, descriptions and published prices come from the
+  October 19, 2026 Torn Stats snapshot. Positive buy price is used first, then
+  market value, then sell price, then a $250 fallback. Effects use Lockdown
+  balance profiles. Source effects are labeled separately; prices are not live.
+- Cars, books, packs, tools and unsupported special items serve as collection
+  items. This update does not add racing, crafting, book buffs or pack opening.
+- Source Unused entries are unavailable to buy. Books cannot be
+  listed on the player market.
+- Razor #1218 and Diesel #1229 source image URLs return 404, so they use
+  existing default item artwork with a label.
+- Existing artwork, header stat bars and desktop navigation are preserved.
+- UPDATE-MANIFEST.json records every included game file and its SHA-256.

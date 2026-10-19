@@ -44,12 +44,12 @@
     </thead>
     <tbody>
     <% prisonJobs.forEach(function(j) { %>
-    <% const eligible = user.defense >= j.req_def; %>
+    <% const eligible = user.defense >= j.req_def && (j.key!=='brain_surgeon' || user.perks?.brainSurgery); %>
     <% const isMine   = user.job_key === j.key && user.job_prison_id === user.prison_id; %>
     <tr style="border-bottom:1px solid #1a1a1a;<%= isMine?'background:#0a1a0a;':'' %>">
-      <td style="padding:10px;font-size:13px;color:<%= eligible?'#ddd':'#555' %>;"><%= j.name %></td>
+      <td style="padding:10px;font-size:13px;color:<%= eligible?'#ddd':'#555' %>;"><%= j.name %><% if(j.key==='brain_surgeon'){ %><small style="display:block">Requires Brain Surgery education · permanently unlocks revives</small><% } %></td>
       <td style="padding:10px;text-align:center;font-size:12px;color:<%= eligible?'#88aa88':'#aa4444' %>;">
-        <%= j.req_def %><% if (!eligible) { %> <span style="font-size:10px;">(need <%= j.req_def - user.defense %> more)</span><% } %>
+        <%= j.req_def %><% if (user.defense < j.req_def) { %> <span style="font-size:10px;">(need <%= j.req_def - user.defense %> more)</span><% } %>
       </td>
       <td style="padding:10px;text-align:center;font-size:12px;color:#ffcc44;">$<%= j.base_pay %>+</td>
       <td style="padding:10px;text-align:center;font-size:12px;color:#8888aa;">+<%= j.xp_per_day %></td>

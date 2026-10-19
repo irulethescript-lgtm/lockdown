@@ -15,7 +15,8 @@
   <div class="nav">
     <a style="float:right; margin-left:5px; background:#cc0000; color:#fff; font-weight:bold;" href="/logout" onclick="return confirm('Sign out?')"> X </a>
     <a style="float:right;" href="/api/online" id="onlineLink"><span id="onlineCount">?</span> Online</a>
-    <a href="/city">Home</a>
+    <a href="/how-to">How To</a>
+    <a href="/home">Home</a>
     <a href="/shoutbox">Shoutbox</a>
     <a href="/most-wanted">Most Wanted</a>
     <a href="/citizens">Citizens</a>
@@ -34,13 +35,7 @@
         <div style="float:left; width:65px;">
           <a href="/profile/<%= user.username %>">
             <%
-              let avatarLayers = [];
-              if (user.avatar) {
-                try {
-                  const av = JSON.parse(user.avatar);
-                  avatarLayers = Object.values(av).filter(v => v && v !== 'none');
-                } catch(e) {}
-              }
+              const avatarLayers = user.avatar ? avatarImages(user.avatar) : [];
             %>
             <div class="avatarBox" style="position:relative;overflow:hidden;background:#222;">
               <% if (avatarLayers.length > 0) { %>
@@ -58,7 +53,7 @@
           <div style="margin-bottom:2px;"><span class="important" style="color:#fff;">Level:</span> <span id="um_level"><%= user.level %></span></div>
           <div style="margin-bottom:2px;" title="$<%= user.cash %>"><span class="important" style="color:#fff;">Cash:</span> $<span id="um_cash"><%= formatCash(user.cash) %></span></div>
           <div style="margin-bottom:2px;"><span class="important" style="color:#fff;">Rep:</span> <span id="um_rep"><%= user.rep %></span></div>
-          <div><span class="important" style="color:#fff;">Favors:</span> <span id="um_favors"><%= user.favors||0 %></span></div>
+          <div><span class="important" style="color:#fff;">Tokens:</span> <span id="um_favors"><%= user.favors||0 %></span></div>
         </div>
         <div class="breaker"></div>
       </div>
@@ -121,6 +116,7 @@
             </div>
           </div>
         </div>
+        <div style="text-align:right;font-size:10px;padding:3px 0"><a href="/hospital" id="medical-status" title="Medical cooldown; use medicine while below the limit" style="color:#ddd">Medical: <span id="header-medical" data-timer="<%= user.cooldowns?.find(c=>c.category==='medical')?.ready_at||0 %>">Ready</span> / <%= (user.medical?.cap||21600)/3600 %>h</a> · <a href="/inventory" style="color:#ddd">Drug: <span id="header-drug" data-timer="<%= user.cooldowns?.find(c=>c.category==='drug')?.ready_at||0 %>">Ready</span></a></div>
         <!-- EXP bar full width below -->
         <div class="attribute" style="margin-top:2px;">
           <div class="label">EXP:</div>
@@ -142,60 +138,49 @@
   <div id="siteBody" class="bricks">
     <div id="leftColumn">
 
-      <!-- Mail / Events -->
-      <div id="eventMailDiv" style="background:url('/images/tsprite_gray.png'); padding:3px; width:151px; margin:0 auto 10px; color:#fff; border:2px solid #777774; text-align:center; font-size:10px;">
-        <a href="/mail">Mail [<span class="neongreen" id="um_mail"><%= unreadMail %></span>]</a> | <a href="/events">Events [<span id="um_events"><%= unreadEvents %></span>]</a>
-      </div>
-
-      <!-- MENU -->
-      <div class="menuHeader main"></div>
-      <div class="menu">
-        <a href="/city">Overview</a>
-        <a href="/city#daily">Daily Objectives</a>
-        <a href="/account">My Account</a>
-        <a href="/property" class="alt">My Property</a>
-        <a href="/bank">My Bank Account</a>
-        <a href="/equipment">My Equipment</a>
-        <a href="/inventory">My Inventory</a>
-        <a href="/crimes">Commit Crimes</a>
-        <a href="/battles">Battles</a>
-        <a href="/events">Events [<span class="neongreen"><%= unreadEvents %></span>]</a>
-        <div class="footer"></div>
-      </div>
-
-      <!-- PRISON -->
-      <div class="menuHeader prison"></div>
-      <div class="menu">
-        <a href="/city">Explore City</a>
-        <a href="/jobs" class="alt">Job Listings</a>
-        <a href="/gym">The Gym</a>
-        <a href="/education" class="alt">Education</a>
-        <a href="/hospital" class="alt">Hospital</a>
-        <a href="/surgeon">Surgeon</a>
-        <a href="/jail" class="alt">City Jail</a>
-        <a href="/market">Marketplace</a>
-        <a href="/hitlist" class="alt">The Hitlist</a>
-        <a href="/broker">The Broker</a>
-        <a href="/airport" class="alt">Airport</a>
-        <a href="/most-wanted">Most Wanted</a>
-        <a href="/relocate" class="alt">City Relocation</a>
-        <a href="/openmarket">Open Market</a>
-        <a href="/send-money" class="alt">Send Money</a>
-        <a href="/citizens">Citizens</a>
-        <a href="/logs" class="alt">📋 Trade Logs</a>
-        <a href="/shoutbox">Shoutbox</a>
-        <a href="#" onclick="claimVote();return false;" style="color:#88aaff;">Vote for Favor ⭐</a>
-        <div class="footer"></div>
-      </div>
-
-      <!-- GANGS -->
-      <div class="menuHeader gangs"></div>
-      <div class="menu">
-        <a href="/my-faction">My Faction</a>
-        <a href="/factions" class="alt">Known Factions</a>
-        <a href="/faction-invites">Faction Invites</a>
-        <div class="footer"></div>
-      </div>
+      <nav class="city-sidebar" aria-label="Main menu">
+        <h2>Missions</h2>
+        <a href="/missions"><i>◎</i> Missions</a>
+        <h2>Account</h2>
+        <a href="/mail"><i>✉</i> Mailbox <span id="um_mail"><%= unreadMail %></span></a>
+        <a href="/events"><i>ϟ</i> Events <span id="um_events"><%= unreadEvents %></span></a>
+        <a href="/awards"><i>♜</i> Awards</a>
+        <a href="/account"><i>⚙</i> Settings</a>
+        <h2>Areas</h2>
+        <a href="/home"><i>⌂</i> Home</a>
+        <a href="/inventory"><i>▣</i> Items</a>
+        <a href="/city"><i>♧</i> City</a>
+        <a href="/jobs"><i>▰</i> Job</a>
+        <a href="/gym"><i>⚒</i> Gym</a>
+        <a href="/property"><i>▥</i> Properties</a>
+        <a href="/education"><i>▱</i> Education</a>
+        <a href="/crimes"><i>◉</i> Crimes</a>
+        <a href="/newspaper"><i>▤</i> Newspaper</a>
+        <a href="/jail"><i>╫</i> Jail</a>
+        <a href="/hospital"><i>✚</i> Hospital</a>
+        <a href="/casino"><i>♠</i> Casino</a>
+        <a href="/most-wanted"><i>♜</i> Hall of Fame</a>
+        <a href="/factions"><i>⚑</i> Factions</a>
+        <h2>Lists</h2>
+        <a href="/citizens"><i>♙</i> Citizens</a>
+        <a href="/hitlist"><i>⊕</i> Bounties</a>
+        <a href="/my-faction"><i>⚑</i> My Faction</a>
+        <a href="/faction-invites"><i>✉</i> Faction Invites</a>
+        <h2>Specials</h2>
+        <a href="/market"><i>▣</i> Item Market</a>
+        <a href="/bank"><i>$</i> City Bank</a>
+        <a href="/points"><i>◈</i> Points Building</a>
+        <a href="/airport"><i>✈</i> Travel Agency</a>
+        <a href="/equipment"><i>⚔</i> Equipment</a>
+        <a href="/battles"><i>⚔</i> Attack</a>
+        <a href="/surgeon"><i>♙</i> Plastic Surgeon</a>
+        <a href="/broker"><i>▦</i> Broker</a>
+        <a href="/openmarket"><i>▣</i> Player Market</a>
+        <a href="/send-money"><i>$</i> Send Money</a>
+        <a href="/logs"><i>▤</i> Trade Logs</a>
+        <a href="/shoutbox"><i>☏</i> Shoutbox</a>
+        <a href="#" onclick="claimVote();return false;"><i>★</i> Vote for Token</a>
+      </nav>
 
       <!-- Game Time -->
       <div style="background:url('/images/tsprite_gray.png'); padding:3px; width:151px; margin:0 auto 10px; color:#fff; border:2px solid #777774; text-align:center; font-size:10px;">
@@ -253,7 +238,7 @@
   });
 
 function claimVote() {
-  fetch('/favors/vote', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' })
+  fetch('/tokens/vote', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' })
     .then(r=>r.json()).then(d => {
       alert(d.msg || d.error);
       if (d.favors !== undefined) setText('um_favors', d.favors);
@@ -263,3 +248,5 @@ function claimVote() {
 
 </body>
 </html>
+
+<script src="/js/cooldowns.js" defer></script>

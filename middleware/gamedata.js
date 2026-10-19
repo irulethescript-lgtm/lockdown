@@ -9,6 +9,12 @@ const MISSIONS = [
 ];
 
 const ITEMS = {
+  first_aid_pouch: {"name": "First Aid Pouch", "price": 100, "effect": {"hp": 120}, "img": "/amenities/default.png", "desc": "+120 HP", "consumable": true},
+  trauma_pack: {"name": "Trauma Pack", "price": 220, "effect": {"hp": 250}, "img": "/amenities/default.png", "desc": "+250 HP", "consumable": true},
+  pulse_can: {"name": "Pulse Energy", "price": 90, "effect": {"energy": 60}, "img": "/amenities/energy_drinks.png", "desc": "+60 Energy", "consumable": true},
+  espresso_shot: {"name": "Espresso Shot", "price": 30, "effect": {"energy": 20}, "img": "/amenities/energy_drinks.png", "desc": "+20 Energy", "consumable": true},
+  courage_flask: {"name": "Courage Flask", "price": 120, "effect": {"nerve": 4}, "img": "/amenities/water_bottle.png", "desc": "+4 Nerve", "consumable": true},
+  trail_mix: {"name": "Trail Mix", "price": 60, "effect": {"energy": 20, "hp": 25}, "img": "/amenities/default.png", "desc": "+20 Energy, +25 HP", "consumable": true},
   shiv:          { name: 'Shiv',           img: '/amenities/shiv.png',            desc: '+5 STR in combat',        price: 150,  effect: { strength: 5 },             slot: 'weapon' },
   knuckle_wraps: { name: 'Knuckle Wraps',  img: '/amenities/work_gloves.png',     desc: '+3 STR, +2 DEF',          price: 200,  effect: { strength: 3, defense: 2 }, slot: 'weapon' },
   steel_toes:    { name: 'Steel Toes',     img: '/amenities/default.png',         desc: '+4 SPD',                  price: 180,  effect: { speed: 4 },                slot: 'boots'  },
@@ -506,6 +512,9 @@ async function levelUpCheck(user, run) {
 
 // ─── WEAPONS ─────────────────────────────────────────────────────────────────
 const WEAPONS = {
+  baseball_bat: {"name": "Baseball Bat", "price": 300, "effect": {"strength": 15}, "img": "/amenities/baton.png", "desc": "+15 STR", "tier": 1},
+  compact_pistol: {"name": "Compact Pistol", "price": 850, "effect": {"strength": 28, "speed": 5}, "img": "/amenities/default.png", "desc": "+28 STR, +5 SPD", "tier": 2},
+  pump_shotgun: {"name": "Pump Shotgun", "price": 2400, "effect": {"strength": 60, "speed": -5}, "img": "/amenities/default.png", "desc": "+60 STR, -5 SPD", "tier": 3},
   shiv:           { name: 'Shiv',              img: '/amenities/shiv.png',       desc: '+5 STR',              price: 150,  effect: { strength: 5 },              tier: 1 },
   sock_rock:      { name: 'Sock and Rock',      img: '/amenities/default.png',    desc: '+8 STR',              price: 200,  effect: { strength: 8 },              tier: 1 },
   blade:          { name: 'Blade',              img: '/amenities/shiv.png',       desc: '+12 STR, +3 SPD',     price: 250,  effect: { strength: 12, speed: 3 },   tier: 1 },
@@ -524,8 +533,10 @@ const WEAPONS = {
 
 // ─── ARMOR ────────────────────────────────────────────────────────────────────
 const ARMOR = {
+  motorcycle_jacket: {"name": "Motorcycle Jacket", "price": 300, "effect": {"defense": 18}, "img": "/amenities/default.png", "desc": "+18 DEF", "tier": 1},
+  ballistic_vest: {"name": "Ballistic Vest", "price": 3300, "effect": {"defense": 85, "max_hp": 15}, "img": "/amenities/default.png", "desc": "+85 DEF, +15 Max HP", "tier": 3},
   bandana:        { name: 'Bandana',           img: '/amenities/bandana.png',    desc: '+5 DEF',              price: 100,  effect: { defense: 5 },               tier: 1 },
-  torn_jacket:    { name: 'Torn Jacket',       img: '/amenities/default.png',    desc: '+10 DEF',             price: 200,  effect: { defense: 10 },              tier: 1 },
+  torn_jacket:    { name: 'Lock down Jacket',       img: '/amenities/default.png',    desc: '+10 DEF',             price: 200,  effect: { defense: 10 },              tier: 1 },
   yellow_pages:   { name: 'Yellow Pages',      img: '/amenities/default.png',    desc: '+15 DEF (makeshift)', price: 80,   effect: { defense: 15 },              tier: 1 },
   food_tray:      { name: 'Food Tray',         img: '/amenities/default.png',    desc: '+8 DEF (improvised)', price: 50,   effect: { defense: 8 },               tier: 1 },
   bullet_proof_vest: { name: 'Bulletproof Vest', img: '/amenities/default.png', desc: '+50 DEF, +20 HP',     price: 1200, effect: { defense: 50, max_hp: 20 },  tier: 2 },
@@ -540,6 +551,8 @@ const ARMOR = {
 
 // ─── GEAR ─────────────────────────────────────────────────────────────────────
 const GEAR = {
+  running_shoes: {"name": "Running Shoes", "price": 220, "effect": {"speed": 6}, "img": "/amenities/default.png", "desc": "+6 SPD", "tier": 1},
+  tactical_gloves: {"name": "Tactical Gloves", "price": 700, "effect": {"strength": 12, "defense": 10}, "img": "/amenities/work_gloves.png", "desc": "+12 STR, +10 DEF", "tier": 2},
   work_gloves:    { name: 'Work Gloves',       img: '/amenities/default.png', desc: '+3 STR, +3 DEF',     price: 150,  effect: { strength: 3, defense: 3 },  tier: 1 },
   lucky_charm:    { name: 'Lucky Charm',       img: '/amenities/default.png',  desc: '+5 HP, +1 Nerve',    price: 120,  effect: { max_hp: 5, max_nerve: 1 },  tier: 1 },
   brass_knuckles: { name: 'Brass Knuckles',    img: '/amenities/brass_knuckles.png',  desc: '+15 STR, +5 SPD',   price: 500,  effect: { strength: 15, speed: 5 },   tier: 2 },
@@ -743,4 +756,14 @@ const JOBS = {
   ],
 };
 
+// Casino city career special: one token refill per UTC day.
+JOBS[1].push({key:'gaming_consultant',name:'Gaming Consultant',req_def:100,base_pay:140,xp_per_day:12});
+
+// Keep imported IDs separate from legacy keys so existing saves retain their stats.
+const importedCatalogs = require('./torn-catalog').buildCatalog();
+for (const [type, catalog] of Object.entries({ item: ITEMS, weapon: WEAPONS, armor: ARMOR, gear: GEAR, drug: DRUGS })) {
+  Object.assign(catalog, importedCatalogs[type]);
+}
+
 module.exports = { getAmenityImg, MISSIONS, ITEMS, CELL_AMENITIES, WEAPONS, ARMOR, GEAR, DRUGS, PRISONS, TITLES, getTitle, levelUpCheck, JOBS };
+for(const jobs of Object.values(JOBS)) jobs.push({key:'brain_surgeon',name:'Brain Surgeon',req_def:100,base_pay:200,xp_per_day:15});

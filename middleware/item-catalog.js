@@ -8,8 +8,8 @@ function getItem(type, key) {
 }
 function canBuyInPrison(type, key, prisonId) {
   const item=getItem(type,key), prison=PRISONS.find(p=>p.id===prisonId);
-  if(!item || !prison || !['item','weapon','armor','gear','drug'].includes(type)) return false;
-  const tiers=type==='drug'||type==='item'?prison.item_tiers:prison[`${type}_tiers`];
-  return Array.isArray(tiers) && tiers.includes(item.tier || 1);
+  if(!item || item.for_sale === false || !prison || !['item','weapon','armor','gear','drug'].includes(type)) return false;
+  return true; // Availability now comes from shared rotating stock, not relocation.
+
 }
 module.exports={CATALOGS,getItem,canBuyInPrison};

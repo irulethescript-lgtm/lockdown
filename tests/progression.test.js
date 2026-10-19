@@ -548,7 +548,7 @@ async function relogin(user) {
 
 test('departure validates destination, recovery and fare; concurrent departures charge once and preserve home',async()=>{
   const user=await account();
-  for(const destination_id of [1,0,6,2.5,true,null,'']) assert.ok((await post(user,'/yard/depart',{destination_id})).error);
+  for(const destination_id of [0,11,2.5,true,null,'']) assert.ok((await post(user,'/yard/depart',{destination_id})).error);
   await run('UPDATE users SET in_jail=1,jail_until=? WHERE id=?',[Math.floor(Date.now()/1000)+600,user.id]);
   assert.match((await post(user,'/yard/depart',{destination_id:2})).error,/jail/);
   await run('UPDATE users SET in_jail=0,cash=0 WHERE id=?',[user.id]);
@@ -579,64 +579,72 @@ test('travel blocks home mutations and combat targets; transit cannot buy or tur
   assert.match((await post(user,'/yard/sell',{item_key:'island_stamp',quantity:1})).error,/home/);
 });
 
-test('cargo purchases validate goods and quantities and atomically enforce shared stock and bag space',async()=>{
-  const a=await account(),b=await account();
-  for(const u of [a,b]) {await run('UPDATE users SET cash=10000 WHERE id=?',[u.id]);await post(u,'/yard/depart',{destination_id:2});await arrive(u);}
-  for(const quantity of [0,-1,1.5,true,null,'',100000000000000000]) assert.ok((await post(a,'/yard/buy',{item_key:'island_stamp',quantity})).error);
-  assert.ok((await post(a,'/yard/buy',{item_key:'black_feather',quantity:1})).error);
-  await run("UPDATE travel_stock SET quantity=5,restock_at=? WHERE item_key='island_stamp'",[Math.floor(Date.now()/1000)+900]);
-  const shared=await Promise.all([post(a,'/yard/buy',{item_key:'island_stamp',quantity:4}),post(b,'/yard/buy',{item_key:'island_stamp',quantity:4})]);
-  assert.equal(shared.filter(r=>!r.error).length,1);
-  assert.equal((await query("SELECT quantity FROM travel_stock WHERE item_key='island_stamp'")).quantity,1);
-  const winner=shared[0].error?b:a;
-  const filled=await Promise.all([post(winner,'/yard/buy',{item_key:'sea_glass_charm',quantity:2}),post(winner,'/yard/buy',{item_key:'sea_glass_charm',quantity:2})]);
-  assert.equal(filled.filter(r=>!r.error).length,1);
-  assert.equal((await query('SELECT SUM(c.quantity) AS n FROM travel_cargo c JOIN travel_trips t ON t.id=c.trip_id WHERE t.user_id=?',[winner.id])).n,6);
-  assert.equal((await query("SELECT COUNT(*) AS n FROM inventory WHERE user_id=? AND item_type='collectible'",[winner.id])).n,0);
-  assert.equal((await stats(winner)).cash,10000-120-4*35-2*80);
+test('overseas purchases enforce typed catalogs, shared stock and bag space atomically',async()=>{
+ const a=await account(),b=await account();
+ for(const u of [a,b]){await run('UPDATE users SET cash=1000000000 WHERE id=?',[u.id]);await post(u,'/yard/depart',{destination_id:2});await arrive(u);}
+ const offers=(await travelState(a)).travel.offers;
+ assert.equal(offers.length,12);
+ const good=offers.find(g=>g.group==='flowers'),second=offers.find(g=>g.group==='plushies');
+ const buy=(u,g,quantity)=>post(u,'/yard/buy',{item_key:g.key,item_type:g.type,quantity});
+ for(const q of [0,-1,1.5,true,null,''])assert.ok((await buy(a,good,q)).error);
+ assert.ok((await post(a,'/yard/buy',{item_key:'water_bottle',item_type:'item',quantity:1})).error);
+ assert.ok((await post(a,'/yard/buy',{item_key:good.key,item_type:'weapon',quantity:1})).error);
+ await run("UPDATE rotating_stock SET quantity=5 WHERE scope='country:2' AND item_key=? AND item_type=?",[good.key,good.type]);
+ await run("UPDATE rotating_stock SET quantity=10 WHERE scope='country:2' AND item_key=? AND item_type=?",[second.key,second.type]);
+ const purchases=await Promise.all([buy(a,good,4),buy(b,good,4)]);
+ assert.equal(purchases.filter(r=>!r.error).length,1);
+ const winner=purchases[0].error?b:a;
+ const fills=await Promise.all([buy(winner,second,2),buy(winner,second,2)]);
+ assert.equal(fills.filter(r=>!r.error).length,1);
+ assert.equal((await query("SELECT quantity FROM rotating_stock WHERE scope='country:2' AND item_type=? AND item_key=?",[good.type,good.key])).quantity,1);
+ assert.equal((await stats(winner)).cash,1000000000-120-4*good.price-2*second.price);
+ assert.equal((await query('SELECT COUNT(*) AS n FROM inventory WHERE user_id=?',[winner.id])).n,0);
+ const page=await fetch(origin+'/airport',{headers:{Cookie:winner.cookie}});assert.equal(page.status,200);assert.match(await page.text(),/General store/);
 });
 
-test('return is prepaid and delivery settles exactly once under parallel polling; discoveries survive sales',async()=>{
-  const user=await account();await run('UPDATE users SET cash=1000 WHERE id=?',[user.id]);
-  await post(user,'/yard/depart',{destination_id:2});await arrive(user);
-  await run("UPDATE travel_stock SET quantity=16 WHERE item_key='island_stamp'");
-  assert.ok(!(await post(user,'/yard/buy',{item_key:'island_stamp',quantity:3})).error);
-  await run('UPDATE users SET cash=0 WHERE id=?',[user.id]);
-  const returning=await post(user,'/yard/return');assert.equal(returning.travel.phase,'returning');
-  assert.equal(returning.user.cash,0);
-  assert.equal((await query('SELECT COUNT(*) AS n FROM inventory WHERE user_id=?',[user.id])).n,0);
-  await run('UPDATE travel_trips SET return_arrives_at=0 WHERE user_id=?',[user.id]);
-  await Promise.all(Array.from({length:8},(_,i)=>i%2?travelState(user):fetch(origin+'/api/stats',{headers:{Cookie:user.cookie}}).then(r=>r.json())));
-  assert.equal((await query("SELECT quantity FROM inventory WHERE user_id=? AND item_key='island_stamp'",[user.id])).quantity,3);
-  assert.equal((await query('SELECT trips_completed FROM travel_progress WHERE user_id=?',[user.id])).trips_completed,1);
-  assert.equal((await query('SELECT total_brought FROM travel_discoveries WHERE user_id=?',[user.id])).total_brought,3);
-  const sales=await Promise.all([post(user,'/yard/sell',{item_key:'island_stamp',quantity:3}),post(user,'/yard/sell',{item_key:'island_stamp',quantity:3})]);
-  assert.equal(sales.filter(r=>!r.error).length,1);assert.equal((await stats(user)).cash,255);
-  assert.equal((await travelState(user)).travel.discoveries.length,1);
-  assert.equal((await query('SELECT sales_cash FROM travel_progress WHERE user_id=?',[user.id])).sales_cash,255);
+test('typed cargo delivers once under parallel polling and is equippable and tradeable at home',async()=>{
+ const user=await account();await run('UPDATE users SET cash=1000000000 WHERE id=?',[user.id]);
+ await post(user,'/yard/depart',{destination_id:3});await arrive(user);
+ const good=(await travelState(user)).travel.offers.filter(g=>g.group==='weapons').sort((a,b)=>a.price-b.price)[0];
+ await run("UPDATE rotating_stock SET quantity=10 WHERE scope='country:3' AND item_key=? AND item_type=?",[good.key,good.type]);
+ assert.ok(!(await post(user,'/yard/buy',{item_key:good.key,item_type:good.type,quantity:2})).error);
+ await run('UPDATE users SET cash=0 WHERE id=?',[user.id]);
+ assert.ok(!(await post(user,'/yard/return')).error);
+ await run('UPDATE travel_trips SET return_arrives_at=0 WHERE user_id=?',[user.id]);
+ await Promise.all(Array.from({length:6},()=>travelState(user)));
+ assert.equal((await query('SELECT quantity FROM inventory WHERE user_id=? AND item_type=? AND item_key=?',[user.id,good.type,good.key])).quantity,2);
+ assert.equal((await query('SELECT trips_completed FROM travel_progress WHERE user_id=?',[user.id])).trips_completed,1);
+ assert.equal((await stats(user)).cash,0);
+ assert.ok(!(await post(user,'/equipment/equip',{slot:'weapon',key:good.key,action:'equip'})).error);
+ assert.ok(!(await post(user,'/inventory/list',{item_type:good.type,item_key:good.key,quantity:1,price:100})).error);
 });
 
-test('empty return is possible with zero cash; local souvenirs never create a buy-sell profit',async()=>{
-  const user=await account();
-  await run("UPDATE travel_stock SET quantity=16 WHERE item_key='buckeye_token'");
-  const buy=await post(user,'/yard/buy',{item_key:'buckeye_token',quantity:2});
-  assert.ok(!buy.error);assert.equal(buy.user.cash,400);assert.equal(buy.travel.discoveries.length,1);
-  assert.ok(!(await post(user,'/yard/sell',{item_key:'buckeye_token',quantity:2})).error);
-  assert.equal((await stats(user)).cash,500);
-  await post(user,'/yard/depart',{destination_id:2});await arrive(user);
-  await run('UPDATE users SET cash=0 WHERE id=?',[user.id]);
-  assert.equal((await returnHome(user)).travel.phase,'home');
-  assert.equal((await stats(user)).cash,0);
+test('empty return remains prepaid and the overseas store is not purchasable from home',async()=>{
+ const user=await account();
+ assert.ok((await post(user,'/yard/buy',{item_key:'buckeye_token',quantity:1})).error);
+ await post(user,'/yard/depart',{destination_id:2});await arrive(user);
+ await run('UPDATE users SET cash=0 WHERE id=?',[user.id]);
+ assert.equal((await returnHome(user)).travel.phase,'home');assert.equal((await stats(user)).cash,0);
 });
 
-test('stock restocks once at its deadline and is not replenished by reading the page',async()=>{
-  const user=await account();
-  await run("UPDATE travel_stock SET quantity=0,restock_at=0 WHERE item_key='buckeye_token'");
-  const fresh=(await travelState(user)).travel.stock.find(s=>s.item_key==='buckeye_token');
-  assert.equal(fresh.quantity,16);assert.equal(fresh.restock_at%900,0);
-  await post(user,'/yard/buy',{item_key:'buckeye_token',quantity:1});
-  const next=(await travelState(user)).travel.stock.find(s=>s.item_key==='buckeye_token');
-  assert.equal(next.quantity,15);assert.equal(next.restock_at,fresh.restock_at);
+test('hourly stock stays sold out until deadline; rare offers expire; country catalogs stay fixed',async()=>{
+ const {ROUTES}=require('../middleware/travel');const {overseasCatalog,quantityFor}=require('../middleware/shops');
+ assert.equal(ROUTES.length,10);
+ for(const r of ROUTES){const goods=overseasCatalog(r.id);assert.equal(goods.length,12);assert.equal(new Set(goods.map(g=>g.key)).size,12);assert.equal(goods.filter(g=>g.rare).length,2);}
+ assert.ok(quantityFor(100,'cheap')>=400);assert.ok([2,3].includes(quantityFor(400000000,'expensive')));
+ const all=ROUTES.flatMap(r=>overseasCatalog(r.id));assert.ok(all.some(i=>i.localPrice<i.price));assert.ok(all.some(i=>i.localPrice>i.price));
+ const user=await account();await post(user,'/yard/depart',{destination_id:2});await arrive(user);
+ const before=(await travelState(user)).travel.offers;
+ const good=before.find(g=>!g.rare),rare=before.find(g=>g.rare);
+ await run("UPDATE rotating_stock SET quantity=0 WHERE scope='country:2' AND item_key=?",[good.key]);
+ assert.equal((await travelState(user)).travel.offers.find(i=>i.key===good.key).quantity,0);
+ await run("UPDATE rotating_stock SET restock_at=0 WHERE scope='country:2' AND item_key=?",[good.key]);
+ const fresh=(await travelState(user)).travel.offers;
+ assert.ok(fresh.find(i=>i.key===good.key).quantity>0);assert.equal(fresh[0].restock_at%3600,0);
+ assert.deepEqual(fresh.map(g=>g.key),before.map(g=>g.key));
+ await run("UPDATE rotating_stock SET active=1,quantity=3,expires_at=1 WHERE scope='country:2' AND item_key=?",[rare.key]);
+ assert.ok((await post(user,'/yard/buy',{item_key:rare.key,item_type:rare.type,quantity:1})).error);
+ assert.equal((await travelState(user)).travel.offers.find(g=>g.key===rare.key).quantity,0);
 });
 
 test('bag upgrades require trips and cash, charge once, and persist capacity at departure',async()=>{
@@ -685,8 +693,8 @@ test('trip phases and cargo survive restarts and legacy inventory without a uniq
   await stop();await start();await relogin(user);
   assert.equal((await travelState(user)).travel.phase,'outbound');
   await arrive(user);
-  await run("UPDATE travel_stock SET quantity=16 WHERE item_key='island_stamp'");
-  await post(user,'/yard/buy',{item_key:'island_stamp',quantity:2});
+  const savedTrip=await query('SELECT id FROM travel_trips WHERE user_id=? AND completed_at IS NULL',[user.id]);
+  await run("INSERT INTO travel_cargo (trip_id,item_key,quantity) VALUES (?,'island_stamp',2)",[savedTrip.id]);
   await stop();await start();await relogin(user);
   assert.equal((await travelState(user)).travel.phase,'visiting');
   await post(user,'/yard/return');
@@ -721,12 +729,11 @@ test('shop resolves colliding item keys by category and charges the displayed pr
  const used=await post(user,'/inventory/use',{item_key:'steroids',item_type:'item'});
  assert.equal(used.user.strength,12);
 });
-test('shop enforces prison tier and category on the server without spending cash',async()=>{
+test('shop validates typed identity and makes old tiers available without relocation',async()=>{
  const user=await account();await run('UPDATE users SET cash=100000 WHERE id=?',[user.id]);
- for(const body of [{item_key:'minigun',item_type:'weapon'},{item_key:'minigun',item_type:'item'},{item_key:'steroids',item_type:'drug'},{item_key:'island_stamp',item_type:'collectible'},{item_key:'__proto__',item_type:'weapon'},{item_key:'shiv',item_type:'__proto__'},{item_key:'shiv'}]) assert.ok((await post(user,'/marketplace/buy',body)).error);
+ for(const body of [{item_key:'minigun',item_type:'item'},{item_key:'island_stamp',item_type:'collectible'},{item_key:'__proto__',item_type:'weapon'},{item_key:'shiv',item_type:'__proto__'},{item_key:'shiv'}]) assert.ok((await post(user,'/marketplace/buy',body)).error);
  assert.equal((await stats(user)).cash,100000);
  assert.equal((await query('SELECT COUNT(*) AS n FROM inventory WHERE user_id=?',[user.id])).n,0);
- await run('UPDATE users SET prison_id=5 WHERE id=?',[user.id]);
  assert.ok(!(await post(user,'/marketplace/buy',{item_key:'minigun',item_type:'weapon'})).error);
  assert.equal((await stats(user)).cash,80000);
 });
@@ -756,9 +763,10 @@ test('city setting provides canonical pages and city travel while preserving leg
   const response=await fetch(origin+url,{headers:{Cookie:user.cookie}});assert.equal(response.status,200,url);
  }
  const city=await (await fetch(origin+'/city',{headers:{Cookie:user.cookie}})).text();
- assert.match(city,/CITIZEN OVERVIEW/);assert.match(city,/Lockdown City/);assert.match(city,/<img src="\/PRISONHALL1\.png" alt="Original LOCKDOWN hall artwork">/);
+ assert.match(city,/city-map-viewport/);assert.match(city,/Lock down/);
+ const home=await(await fetch(origin+'/home',{headers:{Cookie:user.cookie}})).text();assert.match(home,/CITIZEN OVERVIEW/);assert.match(home,/PRISONHALL1.png/);
  const airport=await (await fetch(origin+'/airport',{headers:{Cookie:user.cookie}})).text();
- assert.match(airport,/AIRPORT \/ INTERNATIONAL TRADE/);assert.match(airport,/London/);assert.match(airport,/Tokyo/);assert.match(airport,/Dubai/);assert.match(airport,/Cape Town/);
+ assert.match(airport,/INTERNATIONAL EXCHANGE/);assert.match(airport,/London/);assert.match(airport,/Tokyo/);assert.match(airport,/Dubai/);assert.match(airport,/Brazil/);
  const bought=await post(user,'/shop/buy',{item_key:'water_bottle',item_type:'item'});assert.ok(!bought.error);assert.equal(bought.user.bank,750);
  const trip=await post(user,'/airport/depart',{destination_id:2});assert.ok(!trip.error);assert.equal(trip.travel.phase,'outbound');
  const state=await (await fetch(origin+'/airport/state',{headers:{Cookie:user.cookie}})).json();assert.equal(state.travel.trip.destination_id,2);
@@ -775,7 +783,7 @@ test('dexterity trains independently, survives saves and appears in history and 
  assert.equal((await stats(user)).dexterity,18);
  assert.equal((await query('SELECT dexterity FROM training_history WHERE user_id=?',[user.id])).dexterity,18);
  const gym=await(await fetch(origin+'/gym',{headers:{Cookie:user.cookie}})).text();assert.match(gym,/Train dexterity/);
- const city=await(await fetch(origin+'/city',{headers:{Cookie:user.cookie}})).text();assert.match(city,/DEX 18/);
+ const home=await(await fetch(origin+'/home',{headers:{Cookie:user.cookie}})).text();assert.match(home,/DEX 18/);
 });
 
 test('property comfort counts distinct valid furnishings and happiness boosts the displayed training gain',async()=>{
@@ -873,32 +881,633 @@ test('city life migrations preserve older accounts and do not reapply on restart
  assert.equal(restarted.cash,1234);assert.equal(restarted.bank,567);
 });
 
-test('city relocation is atomic, ends the old job and returns typed listings without losing saves',async()=>{
- const user=await account();
- await run("UPDATE users SET level=20,cash=5000,bank=700,job_key='cleaner',job_prison_id=1,dexterity=77,crime_xp=321 WHERE id=?",[user.id]);
- await run("INSERT INTO cell_amenities (user_id,item_key,placed_tile) VALUES (?,'three_musketeers',1)",[user.id]);
- await run("INSERT INTO inventory (user_id,item_key,item_type,quantity) VALUES (?,'shiv','item',2)",[user.id]);
- for(const type of ['item','weapon','collectible']) await run("INSERT INTO open_market (seller_id,prison_id,item_type,item_key,quantity,price) VALUES (?,1,?,'shiv',3,99)",[user.id,type]);
- for(const prison_id of [true,'2oops',null])assert.ok((await post(user,'/relocate/move',{prison_id})).error);
- const results=await Promise.all([post(user,'/relocate/move',{prison_id:2}),post(user,'/relocate/move',{prison_id:2})]);
- assert.equal(results.filter(r=>!r.error).length,1);
- const moved=await stats(user);assert.equal(moved.prison_id,2);assert.equal(moved.cash,3700);assert.equal(moved.bank,0);
- assert.equal(moved.job_key,null);assert.equal(moved.job_prison_id,null);assert.equal(moved.dexterity,77);assert.equal(moved.crime_xp,321);
- assert.equal((await query('SELECT placed_tile FROM cell_amenities WHERE user_id=?',[user.id])).placed_tile,null);
- for(const [type,qty] of [['item',5],['weapon',3],['collectible',3]])assert.equal((await query('SELECT SUM(quantity) AS n FROM inventory WHERE user_id=? AND item_type=? AND item_key=?',[user.id,type,'shiv'])).n,qty);
- assert.equal((await query('SELECT COUNT(*) AS n FROM open_market WHERE seller_id=? AND active=1',[user.id])).n,0);
+test('permanent relocation is disabled without changing money, job, home or listings',async()=>{
+ const user=await account();await run("UPDATE users SET level=20,cash=5000,bank=700,job_key='cleaner',job_prison_id=1 WHERE id=?",[user.id]);
+ const before=await stats(user);
+ for(const url of ['/relocate/move','/transport/move'])assert.match((await post(user,url,{prison_id:2})).error,/closed/);
+ const after=await stats(user);for(const key of ['cash','bank','job_key','prison_id'])assert.equal(after[key],before[key]);
+ const response=await fetch(origin+'/relocate',{headers:{Cookie:user.cookie},redirect:'manual'});assert.equal(response.status,302);assert.equal(response.headers.get('location'),'/airport');
 });
 
-test('relocation rolls back fees, job, furnishings and listing returns when a write fails',async()=>{
- const user=await account();await run("UPDATE users SET level=20,cash=5000,bank=200,job_key='cleaner',job_prison_id=1 WHERE id=?",[user.id]);
- await run("INSERT INTO cell_amenities (user_id,item_key,placed_tile) VALUES (?,'three_musketeers',1)",[user.id]);
- await run("INSERT INTO open_market (seller_id,prison_id,item_type,item_key,quantity,price) VALUES (?,1,'weapon','shiv',1,99)",[user.id]);
- await run("CREATE TRIGGER reject_relocation BEFORE UPDATE OF prison_id ON users BEGIN SELECT RAISE(ABORT, 'test rollback'); END");
- try {
-  const response=await fetch(origin+'/relocate/move',{method:'POST',headers:{Cookie:user.cookie,'Content-Type':'application/json'},body:JSON.stringify({prison_id:2})});assert.equal(response.status,500);
-  const saved=await stats(user);assert.equal(saved.cash,5000);assert.equal(saved.bank,200);assert.equal(saved.prison_id,1);assert.equal(saved.job_key,'cleaner');
-  assert.equal((await query('SELECT placed_tile FROM cell_amenities WHERE user_id=?',[user.id])).placed_tile,1);
-  assert.equal((await query('SELECT active FROM open_market WHERE seller_id=?',[user.id])).active,1);
-  assert.equal((await query('SELECT COUNT(*) AS n FROM inventory WHERE user_id=?',[user.id])).n,0);
- }finally{await run('DROP TRIGGER reject_relocation');}
+test('homes buy once, require ownership to move in and keep furnishings and city intact',async()=>{
+ const user=await account(),other=await account();await run('UPDATE users SET cash=100000 WHERE id=?',[user.id]);
+ const attempts=await Promise.all([post(user,'/property/buy-home',{home_key:'townhouse'}),post(user,'/property/buy-home',{home_key:'townhouse'})]);
+ assert.equal(attempts.filter(r=>!r.error).length,1);assert.equal((await stats(user)).cash,75000);
+ assert.ok((await post(other,'/property/move-in',{home_key:'townhouse'})).error);
+ assert.ok(!(await post(user,'/property/move-in',{home_key:'townhouse'})).error);
+ assert.equal((await query('SELECT home_key FROM owned_homes WHERE user_id=? AND active=1',[user.id])).home_key,'townhouse');
+ const {CELL_AMENITIES}=require('../middleware/gamedata');const [key,item]=Object.entries(CELL_AMENITIES).find(([,i])=>Number.isSafeInteger(i.price)&&i.price>0&&i.price<1000);
+ assert.ok(!(await post(user,'/property/buy-furnishing',{item_key:key})).error);
+ assert.equal((await stats(user)).cash,75000-item.price);
+ const furnishing=await query('SELECT id FROM cell_amenities WHERE user_id=?',[user.id]);
+ assert.ok((await post(other,'/property/place',{db_id:furnishing.id})).error);
+ assert.ok(!(await post(user,'/property/place',{db_id:furnishing.id})).error);
+ assert.ok((await post(user,'/property/place',{db_id:furnishing.id})).error);
+ assert.ok(!(await post(user,'/property/move-in',{home_key:'starter'})).error);
+ assert.notEqual((await query('SELECT placed_tile FROM cell_amenities WHERE id=?',[furnishing.id])).placed_tile,null);
+ assert.equal((await stats(user)).prison_id,1);
+ const response=await fetch(origin+'/property',{headers:{Cookie:user.cookie}});const html=await response.text();assert.equal(response.status,200);assert.match(html,/YOU LIVE HERE/);assert.doesNotMatch(html,/id="cellArea"/);
+});
+
+test('only imported avatars remain and retired presets cannot restore old artwork', async () => {
+ const user=await account();
+ const {AVATAR_PARTS,DEFAULT_AVATAR,avatarImages}=require('../middleware/avatardata');
+ assert.deepEqual(JSON.parse((await stats(user)).avatar),DEFAULT_AVATAR);
+ assert.deepEqual(avatarImages({head:'head-001',hats:'hat-cap-black'}),[]);
+ assert.ok(Object.values(AVATAR_PARTS).flat().every(p=>!p.img||p.img.startsWith('/avatars/imported/')));
+ const result=await post(user,'/surgeon/save',{layers:{head:'head-001',nose:'nose-small-medium'}});
+ assert.ok(!result.error);
+ assert.deepEqual(JSON.parse((await stats(user)).avatar),DEFAULT_AVATAR);
+ await post(user,'/surgeon/preset/save',{slot:1,layers:{head:'head-001'}});
+ assert.deepEqual(JSON.parse((await query('SELECT layers FROM avatar_presets WHERE user_id=?',[user.id])).layers),DEFAULT_AVATAR);
+ const response=await fetch(origin+'/surgeon/starter',{method:'POST',headers:{Cookie:user.cookie,'Content-Type':'application/json'},body:JSON.stringify({id:'runner'})});
+ assert.equal(response.status,400);
+ const html=await (await fetch(origin+'/surgeon',{headers:{Cookie:user.cookie}})).text();
+ assert.doesNotMatch(html,/data-starter=|6 FREE CHARACTERS|head-001/);
+});
+
+test('city catalog purchases flow into consumable use and equipped combat stats', async () => {
+  const user = await account();
+  await run('UPDATE users SET cash=5000, hp=1 WHERE id=?', [user.id]);
+  assert.ok(!(await post(user, '/shop/buy', { item_key: 'first_aid_pouch', item_type: 'item' })).error);
+  const used = await post(user, '/inventory/use', { item_key: 'first_aid_pouch', item_type: 'item' });
+  assert.ok(!used.error);
+  assert.ok((await query('SELECT hp FROM users WHERE id=?', [user.id])).hp > 1);
+  assert.ok(!(await post(user, '/shop/buy', { item_key: 'baseball_bat', item_type: 'weapon' })).error);
+  assert.ok((await query("SELECT quantity FROM inventory WHERE user_id=? AND item_key='baseball_bat'", [user.id])).quantity === 1);
+  const equipped = await post(user, '/equipment/equip', { action: 'equip', slot: 'weapon', key: 'baseball_bat' });
+  assert.ok(!equipped.error);
+  assert.equal((await query('SELECT weapon FROM equipment WHERE user_id=?', [user.id])).weapon, 'baseball_bat');
+});
+
+test('unified inventory shows owned equipment, typed stacks, collectibles and unplaced furniture', async () => {
+  const user = await account(), other = await account();
+  for (const [key, type, quantity] of [
+    ['shiv','weapon',2], ['shiv','item',1], ['med_kit','item',3],
+    ['energy_drink','item',4], ['moonshine','drug',2], ['buckeye_token','collectible',5],
+  ]) await run('INSERT INTO inventory (user_id,item_key,item_type,quantity) VALUES (?,?,?,?)', [user.id,key,type,quantity]);
+  await run("INSERT INTO inventory (user_id,item_key,item_type,quantity) VALUES (?,'minigun','weapon',9)", [other.id]);
+  await run("INSERT INTO cell_amenities (user_id,item_key) VALUES (?,'jump_street')", [user.id]);
+  await run("INSERT INTO cell_amenities (user_id,item_key,placed_tile) VALUES (?,'bag_of_coal',0)", [user.id]);
+  await run("INSERT INTO equipment (user_id,weapon) VALUES (?,'shiv')", [user.id]);
+  await run("INSERT INTO recovery_cooldowns (user_id,category,ready_at) VALUES (?,'medical',?)", [user.id,Math.floor(Date.now()/1000)+240]);
+  const response = await fetch(origin + '/inventory', { headers: { Cookie:user.cookie } });
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.match(html, /data-category="primary"/);
+  assert.match(html, /data-category="medical"/);
+  assert.match(html, /data-category="energy_drinks"/);
+  assert.match(html, /data-category="alcohol"/);
+  for (const [key,type] of [['shiv','weapon'],['shiv','item'],['buckeye_token','collectible'],['jump_street','amenity']]) {
+    assert.ok(html.includes('data-key="' + key + '" data-type="' + type + '"'));
+  }
+  assert.ok(!html.includes('data-key="minigun"'));
+  assert.ok(!html.includes('data-key="bag_of_coal"'));
+  assert.match(html, /Equipped loadout/);
+  assert.match(html, /data-action="unequip"/);
+  assert.match(html, /id="item-sell-quantity"/);
+  // Listing from the unified page keeps typed identity and stack quantity intact.
+  const listed = await post(user, '/inventory/list', {item_key:'shiv',item_type:'weapon',quantity:1,price:100});
+  assert.ok(!listed.error);
+  assert.equal((await query("SELECT quantity FROM inventory WHERE user_id=? AND item_key='shiv' AND item_type='weapon'", [user.id])).quantity,1);
+  assert.equal((await query("SELECT quantity FROM inventory WHERE user_id=? AND item_key='shiv' AND item_type='item'", [user.id])).quantity,1);
+});
+
+test('market only shows active stock, preserves sold-out rows and rejects hidden purchases',async()=>{
+ const user=await account();
+ await fetch(origin+'/market',{headers:{Cookie:user.cookie}});
+ const now=Math.floor(Date.now()/1000);
+ await run("UPDATE rotating_stock SET active=0 WHERE scope='home' AND item_key='torn_1'");
+ await run("UPDATE rotating_stock SET active=1,quantity=0 WHERE scope='home' AND item_key='torn_2'");
+ for(const url of ['/market','/shop']){
+  const response=await fetch(origin+url,{headers:{Cookie:user.cookie}});const html=await response.text();assert.equal(response.status,200);
+  assert.ok(!html.includes('data-key="torn_1"'));assert.ok(html.includes('data-key="torn_2"'));assert.match(html,/Sold out/);assert.doesNotMatch(html,/Relocate|Torn/);
+ }
+ assert.ok((await post(user,'/marketplace/buy',{item_key:'torn_1',item_type:'weapon'})).error);
+ assert.ok((await post(user,'/marketplace/buy',{item_key:'torn_2',item_type:'weapon'})).error);
+ const a=await account(),b=await account();
+ await run("UPDATE rotating_stock SET active=1,quantity=1,restock_at=? WHERE scope='home' AND item_key='water_bottle' AND item_type='item'",[now+3600]);
+ const results=await Promise.all([post(a,'/marketplace/buy',{item_key:'water_bottle',item_type:'item'}),post(b,'/marketplace/buy',{item_key:'water_bottle',item_type:'item'})]);
+ assert.equal(results.filter(r=>!r.error).length,1);
+ assert.equal((await stats(a)).cash+(await stats(b)).cash,980);
+ assert.equal((await query("SELECT quantity FROM rotating_stock WHERE scope='home' AND item_key='water_bottle' AND item_type='item'")).quantity,0);
+});
+
+test('full Torn Stats catalog preserves metadata, saved types and verified local images', () => {
+  const { readFileSync } = require('node:fs');
+  const { createHash } = require('node:crypto');
+  const source = require('../data/tornstats-items.json');
+  const legacy = require('../data/torn-legacy-types.json').types;
+  const { categoryFor } = require('../middleware/torn-catalog');
+  const images = require('../data/torn-item-images.json');
+  const { CATALOGS } = require('../middleware/item-catalog');
+  const imported = Object.entries(CATALOGS).flatMap(([type,catalog]) => Object.entries(catalog)
+    .filter(([,item]) => item.source_id).map(([key,item]) => ({type,key,...item})));
+  assert.equal(source.items.length,1509);
+  assert.equal(imported.length,source.items.length);
+  assert.equal(Math.max(...source.items.map(item => item.id)),1556);
+  const byId = new Map(imported.map(item => [item.source_id,item]));
+  assert.equal(byId.size,1509);
+  for (const record of source.items) {
+    const {id} = record;
+    const item = byId.get(id);
+    assert.equal(item.key,'torn_'+id);
+    assert.equal(item.name,record.name.replace(/torn/gi,'Lock down'));
+    assert.equal(item.source_description,record.description.replace(/torn/gi,'Lock down'));
+    assert.equal(item.source_market_value,record.market_value);
+    assert.equal(item.source_buy,record.buy);
+    assert.equal(item.source_sell,record.sell);
+    assert.equal(item.source_circulation,record.circulation);
+    assert.equal(item.category,categoryFor(record.type));
+    if (legacy[id]) assert.equal(item.type,legacy[id], 'saved storage type '+id);
+    assert.equal(item.for_sale,record.type!=='Unused');
+    const bytes = readFileSync(path.join(root,'public',item.img));
+    assert.equal(bytes.subarray(0,8).toString('hex'),'89504e470d0a1a0a');
+    assert.equal(createHash('sha256').update(bytes).digest('hex'),images.images[id]);
+    assert.ok(Number.isSafeInteger(item.price) && item.price>0);
+  }
+  assert.equal(CATALOGS.weapon.baseball_bat.price,300);
+  assert.equal(CATALOGS.weapon.torn_2.name,'Baseball Bat');
+  assert.equal(CATALOGS.weapon.torn_1.price,75); // positive published buy price
+  assert.equal(CATALOGS.item.torn_35.price,862); // buy=0 uses market value
+  assert.equal(CATALOGS.item.torn_1556.price,70000000); // no buy/market uses sell
+  assert.equal(CATALOGS.item.torn_744.price,250); // no published positive price
+  assert.equal(CATALOGS.weapon.torn_14.name,'Ruger 57'); // updated source name
+  assert.deepEqual(images.unavailableSourceImages,[1218,1229]);
+  assert.throws(() => categoryFor('New unrecognized category'), /Unknown source/);
+});
+
+test('imported items purchase, equip, recover, trade and survive restart without altering legacy items', async () => {
+  const user = await account();
+  await run('UPDATE users SET cash=100000000, hp=10, energy=0 WHERE id=?',[user.id]);
+  await fetch(origin+'/market',{headers:{Cookie:user.cookie}});
+  await run("UPDATE rotating_stock SET active=1,quantity=10 WHERE scope='home' AND item_key IN ('torn_1','torn_32','torn_66','torn_206','torn_77','torn_744','torn_1556')");
+  for (const [key,type] of [['torn_1','weapon'],['torn_32','armor'],['torn_66','item'],['torn_206','drug'],['torn_77','item'],['torn_744','item']]) {
+    assert.ok(!(await post(user,'/marketplace/buy',{item_key:key,item_type:type})).error,key);
+  }
+  assert.ok(!(await post(user,'/equipment/equip',{action:'equip',slot:'weapon',key:'torn_1'})).error);
+  const equipped = await stats(user);
+  assert.equal(equipped.strength,10); // equipment doesn't overwrite base stats
+  const used = await post(user,'/inventory/use',{item_key:'torn_66',item_type:'item'});
+  assert.ok(!used.error);
+  assert.equal(used.user.hp,25);
+  assert.equal(used.category,'medical');
+  const drug = await post(user,'/inventory/use',{item_key:'torn_206',item_type:'drug'});
+  assert.ok(!drug.error);
+  assert.equal(drug.category,'drug');
+  assert.ok((await post(user,'/inventory/use',{item_key:'torn_77',item_type:'item'})).error);
+  assert.ok(!(await post(user,'/inventory/list',{item_key:'torn_77',item_type:'item',quantity:1,price:25000})).error);
+  assert.ok((await post(user,'/inventory/list',{item_key:'torn_744',item_type:'item',quantity:1,price:5000})).error);
+  for (const key of ['torn_168','torn_208','torn_589','torn_590','torn_591','torn_592']) {
+    assert.ok((await post(user,'/marketplace/buy',{item_key:key,item_type:'item'})).error);
+  }
+  const cashBefore = (await stats(user)).cash;
+  const newItem = await post(user,'/marketplace/buy',{item_key:'torn_1556',item_type:'item'});
+  assert.ok(!newItem.error);
+  assert.equal(newItem.user.cash,cashBefore-70000000);
+  const rejected = await post(user,'/marketplace/buy',{item_key:'torn_1556',item_type:'item'});
+  assert.ok(rejected.error);
+  assert.equal((await stats(user)).cash,cashBefore-70000000);
+  await stop(); await start();
+  assert.equal((await query("SELECT quantity FROM inventory WHERE user_id=? AND item_key='torn_1556'",[user.id])).quantity,1);
+  assert.equal((await query("SELECT quantity FROM inventory WHERE user_id=? AND item_key='torn_1'",[user.id])).quantity,1);
+  assert.equal((await query('SELECT weapon FROM equipment WHERE user_id=?',[user.id])).weapon,'torn_1');
+  const login = await fetch(origin+'/login',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({username:user.username,password:'test-password'}),redirect:'manual'});
+  assert.equal(login.status,302);
+  user.cookie=login.headers.get('set-cookie').split(';')[0];
+  const response = await fetch(origin+'/inventory',{headers:{Cookie:user.cookie}});
+  assert.equal(response.status,200);
+  assert.match(await response.text(),/images\/torn-items\/1.png/);
+});
+
+test('home stock rotation retains some items and hides others without rerolling on reads',async()=>{
+ const {stockFor,shopItems}=require('../middleware/shops');
+ const all=(sql,params)=>new Promise((resolve,reject)=>connection.all(sql,params,(e,rows)=>e?reject(e):resolve(rows)));
+ const store={run,all};const items=shopItems().filter(i=>i.source_id).slice(0,100);
+ await run("DELETE FROM rotating_stock WHERE scope='home'");
+ const first=await stockFor(store,'home',items,3600);
+ const second=await stockFor(store,'home',items,7200);
+ assert.ok(first.some(i=>i.available&&second.find(j=>j.key===i.key).available));
+ assert.ok(first.some(i=>i.available&&!second.find(j=>j.key===i.key).available));
+ assert.ok(second.some(i=>i.available&&!first.find(j=>j.key===i.key).available));
+ const again=await stockFor(store,'home',items,7201);
+ assert.deepEqual(again.map(i=>[i.key,i.quantity,i.active]),second.map(i=>[i.key,i.quantity,i.active]));
+});
+
+test('failed cargo and property writes roll back charges and stock',async()=>{
+ const user=await account();await run('UPDATE users SET cash=10000000 WHERE id=?',[user.id]);
+ await post(user,'/yard/depart',{destination_id:2});await arrive(user);
+ const good=(await travelState(user)).travel.offers.find(g=>g.group==='flowers');
+ const before=await stats(user);
+ await run("CREATE TRIGGER fail_cargo BEFORE INSERT ON travel_cargo BEGIN SELECT RAISE(ABORT,'fixture failure'); END");
+ try{
+  const r=await fetch(origin+'/yard/buy',{method:'POST',headers:{Cookie:user.cookie,'Content-Type':'application/json'},body:JSON.stringify({item_key:good.key,item_type:good.type,quantity:1})});
+  assert.equal(r.status,500);assert.equal((await stats(user)).cash,before.cash);
+  assert.equal((await travelState(user)).travel.offers.find(i=>i.key===good.key).quantity,good.quantity);
+ }finally{await run('DROP TRIGGER fail_cargo');}
+ await returnHome(user);
+ await run("CREATE TRIGGER fail_home BEFORE INSERT ON owned_homes WHEN NEW.home_key='villa' BEGIN SELECT RAISE(ABORT,'fixture failure'); END");
+ try{
+  const r=await fetch(origin+'/property/buy-home',{method:'POST',headers:{Cookie:user.cookie,'Content-Type':'application/json'},body:JSON.stringify({home_key:'villa'})});
+  assert.equal(r.status,500);assert.equal((await stats(user)).cash,before.cash);
+  assert.equal(await query("SELECT * FROM owned_homes WHERE user_id=? AND home_key='villa'",[user.id]),undefined);
+ }finally{await run('DROP TRIGGER fail_home');}
+});
+
+test('retired raids reject stale requests without changing players or furnishings', async () => {
+  const actor=await account(), target=await account();
+  const beforeActor=await stats(actor), beforeTarget=await stats(target);
+  for(const [method,url] of [['GET','/raid/'+target.username],['POST','/raid/attempt'],['POST','/cell/change-combo'],['POST','/property/change-combo'],['GET','/cell-raids']]){
+    const response=await fetch(origin+url,{method,headers:{Cookie:actor.cookie,'Content-Type':'application/json'},...(method==='POST'?{body:JSON.stringify({target_id:target.id,combo:'1234',new_combo:'5678'})}:{})});
+    assert.equal(response.status,410,url);
+  }
+  assert.deepEqual(await stats(actor),beforeActor);
+  assert.deepEqual(await stats(target),beforeTarget);
+  assert.equal((await query('SELECT COUNT(*) AS count FROM raid_attempts WHERE raider_id=?',[actor.id])).count,0);
+});
+
+test('Tokens preserve existing balances and concurrent daily claims award once', async () => {
+  const user=await account();
+  await run('UPDATE users SET favors=17 WHERE id=?',[user.id]);
+  const results=await Promise.all([post(user,'/tokens/vote'),post(user,'/tokens/vote'),post(user,'/favors/vote')]);
+  assert.equal(results.filter(r=>!r.error).length,1);
+  assert.equal((await stats(user)).favors,18);
+  assert.equal((await query("SELECT COUNT(*) AS count FROM events WHERE user_id=? AND type='vote'",[user.id])).count,1);
+  const html=await (await fetch(origin+'/surgeon',{headers:{Cookie:user.cookie}})).text();
+  assert.match(html,/Tokens:/);
+  assert.doesNotMatch(html,/Favors:|Vote for Favor/);
+});
+
+test('imported nose layers save and render while thumbnails stay in the picker', async () => {
+  const user=await account();
+  const imported=require('../middleware/imported-avatar-parts.json').nose;
+  const {readFileSync}=require('node:fs');
+  assert.equal(new Set(imported.map(p=>p.key)).size,imported.length);
+  for(const part of imported){
+    const bytes=readFileSync(path.join(root,'public',part.img));
+    assert.equal(bytes.subarray(1,4).toString(),'PNG');
+    assert.equal(bytes.readUInt32BE(16),242);
+    assert.equal(bytes.readUInt32BE(20),298);
+    if(part.thumb) assert.ok(readFileSync(path.join(root,'public',part.thumb)).length);
+  }
+  const part=imported.find(p=>p.thumb);
+  const result=await post(user,'/surgeon/save',{layers:{nose:part.key}});
+  assert.ok(!result.error);
+  assert.equal(JSON.parse((await stats(user)).avatar).nose,part.key);
+  const html=await (await fetch(origin+'/profile/'+user.username,{headers:{Cookie:user.cookie}})).text();
+  assert.ok(html.includes('src="'+part.img+'"'));
+  assert.ok(!html.includes('src="'+part.thumb+'"'));
+});
+
+test('all imported categories are free and ten preset slots retain new layers', async () => {
+ const {AVATAR_PARTS}=require('../middleware/avatardata');
+ const {existsSync}=require('node:fs');
+ const user=await account(), layers={};
+ for(const [cat,parts] of Object.entries(AVATAR_PARTS)){
+  for(const p of parts){
+   assert.equal(p.free,true);assert.equal(p.rep_cost,0);
+   if(p.img)assert.ok(existsSync(path.join(root,'public',p.img)),p.img);
+   if(p.thumb)assert.ok(existsSync(path.join(root,'public',p.thumb)),p.thumb);
+  }
+  layers[cat]=parts.find(p=>p.img)?.key||'none';
+ }
+ const before=await stats(user);
+ assert.ok(!(await post(user,'/surgeon/save',{layers})).error);
+ assert.ok(!(await post(user,'/surgeon/preset/save',{slot:10,layers})).error);
+ assert.deepEqual(JSON.parse((await query('SELECT layers FROM avatar_presets WHERE user_id=? AND slot=10',[user.id])).layers),layers);
+ assert.ok((await post(user,'/surgeon/preset/save',{slot:11,layers})).error);
+ const after=await stats(user);assert.equal(after.rep,before.rep);assert.equal(after.cash,before.cash);assert.equal(after.favors,before.favors);
+ const html=await (await fetch(origin+'/surgeon',{headers:{Cookie:user.cookie}})).text();
+ assert.match(html,/All avatar parts are free/);assert.doesNotMatch(html,/shopOverlay|Rep to unlock/);
+});
+
+test('city daily rolls persist both outcomes and roll again only on a new UTC day',async()=>{
+ const {dailyFind}=require('../middleware/city-map');
+ const user=await account(), store={get:query,run};
+ const midnight=Date.parse('2026-10-19T00:00:00Z');
+ let calls=0;const noSpawn=n=>{calls++;return n-1;};
+ const empty=await dailyFind(store,user.id,midnight,noSpawn);
+ assert.equal(empty.item_key,null);const savedCalls=calls;
+ assert.deepEqual(await dailyFind(store,user.id,midnight+86399999,()=>{throw Error('rerolled');}),empty);
+ assert.equal(calls,savedCalls);
+ const spawned=await dailyFind(store,user.id,midnight+86400000,()=>0);
+ assert.ok(spawned.item_key);assert.notEqual(spawned.day,empty.day);
+ assert.deepEqual(await dailyFind(store,user.id,midnight+86400001,()=>{throw Error('rerolled');}),spawned);
+});
+
+test('city finds collect exactly once under competing requests and ignore client item keys',async()=>{
+ const user=await account();const day=new Date().toISOString().slice(0,10);
+ await run("INSERT INTO city_daily_finds (user_id,day,item_type,item_key,x,y) VALUES (?,?,'weapon','torn_1',40,50)",[user.id,day]);
+ const result=await Promise.all(Array.from({length:4},()=>post(user,'/city/collect',{item_key:'torn_337',quantity:999})));
+ assert.equal(result.filter(r=>!r.error).length,1);
+ assert.equal((await query("SELECT SUM(quantity) AS n FROM inventory WHERE user_id=? AND item_type='weapon' AND item_key='torn_1'",[user.id])).n,1);
+ assert.equal((await query("SELECT COUNT(*) AS n FROM events WHERE user_id=? AND type='city_find'",[user.id])).n,1);
+ const page=await(await fetch(origin+'/city',{headers:{Cookie:user.cookie}})).text();
+ assert.match(page,/collected today/);assert.doesNotMatch(page,/id="city-find"/);
+ const other=await account();await run('INSERT INTO city_daily_finds (user_id,day,x,y) VALUES (?,?,10,20)',[other.id,day]);
+ assert.ok((await post(other,'/city/collect')).error);
+});
+
+test('city find delivery rolls back on inventory failure and cannot collect while away',async()=>{
+ const user=await account(),day=new Date().toISOString().slice(0,10);
+ await run("INSERT INTO city_daily_finds (user_id,day,item_type,item_key,x,y) VALUES (?,?,'item','water_bottle',40,50)",[user.id,day]);
+ await run("CREATE TRIGGER fail_city_find BEFORE INSERT ON inventory WHEN NEW.user_id="+user.id+" BEGIN SELECT RAISE(ABORT,'test delivery failure'); END");
+ try{
+  const response=await fetch(origin+'/city/collect',{method:'POST',headers:{Cookie:user.cookie,'Content-Type':'application/json'},body:'{}'});
+  assert.equal(response.status,500);
+  assert.equal((await query('SELECT claimed FROM city_daily_finds WHERE user_id=? AND day=?',[user.id,day])).claimed,0);
+ }finally{await run('DROP TRIGGER fail_city_find');}
+ await post(user,'/airport/depart',{destination_id:2});
+ assert.ok((await post(user,'/city/collect')).error);
+ assert.equal((await query('SELECT claimed FROM city_daily_finds WHERE user_id=? AND day=?',[user.id,day])).claimed,0);
+});
+
+// Casino integration requests use an idempotency ID, like the browser.
+async function casinoPlay(user,body,expected=200){
+ const {randomUUID}=require('node:crypto');
+ const response=await fetch(origin+'/casino/action',{method:'POST',headers:{Cookie:user.cookie,'Content-Type':'application/json'},body:JSON.stringify({request_id:randomUUID(),...body})});
+ const json=await response.json();assert.equal(response.status,expected,JSON.stringify(json));return json;
+}
+async function casinoState(user){return (await fetch(origin+'/casino/state',{headers:{Cookie:user.cookie}})).json();}
+
+test('casino daily allowance is separate, resets once, gates levels and rejects malformed bets',async()=>{
+ const user=await account();await run('UPDATE users SET favors=9,cash=5000 WHERE id=?',[user.id]);
+ const initial=await casinoState(user);assert.equal(initial.wallet.tokens,75);assert.equal((await stats(user)).favors,9);
+ await casinoPlay(user,{game:'slots',bet:100},400);
+ await run('UPDATE users SET level=8 WHERE id=?',[user.id]);
+ for(const bet of [-1,0,1.5,'100',1000001,NaN])await casinoPlay(user,{game:'slots',bet},400);
+ assert.equal((await casinoState(user)).wallet.tokens,75);assert.equal((await stats(user)).cash,5000);
+ await run("UPDATE casino_wallets SET tokens=0,day='2000-01-01' WHERE user_id=?",[user.id]);
+ assert.equal((await casinoState(user)).wallet.tokens,75);
+ await run('UPDATE casino_wallets SET tokens=12 WHERE user_id=?',[user.id]);
+ assert.equal((await casinoState(user)).wallet.tokens,12);
+ await run('UPDATE users SET cash=0 WHERE id=?',[user.id]);await casinoPlay(user,{game:'slots',bet:100},400);
+ assert.equal((await casinoState(user)).wallet.tokens,12);
+});
+
+test('casino requests are replay-safe, wheel once per day and failed wagers roll back',async()=>{
+ const user=await account();await run('UPDATE users SET level=8,cash=10000 WHERE id=?',[user.id]);
+ const body={game:'slots',bet:100,request_id:'replayed-slot-001'};
+ const results=await Promise.all([casinoPlay(user,body),casinoPlay(user,body)]);assert.deepEqual(results[0],results[1]);
+ assert.equal((await casinoState(user)).wallet.tokens,74);
+ assert.equal((await query("SELECT COUNT(*) AS n FROM transaction_logs WHERE to_id=? AND note='slots wager'",[user.id])).n,1);
+ await casinoPlay(user,{...body,bet:200},400);
+ await casinoPlay(user,{game:'wheel'});const before=await stats(user);
+ await casinoPlay(user,{game:'wheel'},400);assert.equal((await stats(user)).cash,before.cash);
+ assert.equal((await casinoState(user)).wallet.tokens,73);
+ await run("CREATE TRIGGER fail_casino_log BEFORE INSERT ON transaction_logs WHEN NEW.to_id="+user.id+" BEGIN SELECT RAISE(ABORT,'test wager rollback'); END");
+ try{
+  const response=await fetch(origin+'/casino/action',{method:'POST',headers:{Cookie:user.cookie,'Content-Type':'application/json'},body:JSON.stringify({game:'slots',bet:100,request_id:'rollback-casino-001'})});assert.equal(response.status,500);
+ }finally{await run('DROP TRIGGER fail_casino_log');}
+ assert.equal((await stats(user)).cash,before.cash);assert.equal((await casinoState(user)).wallet.tokens,73);
+});
+
+test('casino refill spends points, passes and job special once without wasting a full balance',async()=>{
+ const user=await account();await run('UPDATE users SET level=8,cash=2000000 WHERE id=?',[user.id]);await casinoState(user);
+ await casinoPlay(user,{game:'points',quantity:30});
+ assert.equal((await casinoState(user)).wallet.points,30);assert.equal((await stats(user)).cash,500000);
+ await casinoPlay(user,{game:'refill',method:'points'},400);assert.equal((await casinoState(user)).wallet.points,30);
+ await run('UPDATE casino_wallets SET tokens=0 WHERE user_id=?',[user.id]);
+ await Promise.all([casinoPlay(user,{game:'refill',method:'points'}),casinoPlay(user,{game:'refill',method:'points'},400)]);
+ assert.equal((await casinoState(user)).wallet.points,0);assert.equal((await casinoState(user)).wallet.tokens,75);
+ await run("INSERT INTO inventory (user_id,item_key,item_type,quantity) VALUES (?,'torn_428','item',1)",[user.id]);
+ await casinoPlay(user,{game:'refill',method:'pass'},400);
+ assert.equal((await query("SELECT quantity FROM inventory WHERE user_id=? AND item_key='torn_428'",[user.id])).quantity,1);
+ await run('UPDATE casino_wallets SET tokens=0 WHERE user_id=?',[user.id]);await casinoPlay(user,{game:'refill',method:'pass'});
+ assert.equal((await query("SELECT quantity FROM inventory WHERE user_id=? AND item_key='torn_428'",[user.id])).quantity,0);
+ await run('UPDATE casino_wallets SET tokens=0 WHERE user_id=?',[user.id]);await casinoPlay(user,{game:'refill',method:'job'},400);
+ await run("UPDATE users SET job_key='gaming_consultant',job_prison_id=prison_id WHERE id=?",[user.id]);
+ await casinoPlay(user,{game:'refill',method:'job'});await run('UPDATE casino_wallets SET tokens=0 WHERE user_id=?',[user.id]);
+ await casinoPlay(user,{game:'refill',method:'job'},400);
+});
+
+test('blackjack hides dealer and deck, pays naturals, doubles, Charlie and insurance with awards',async()=>{
+ const user=await account();await run('UPDATE users SET level=8,cash=10000 WHERE id=?',[user.id]);
+ const c=rank=>({rank,suit:0});
+ async function hand(player,dealer,deck,bet=100){
+  await run("DELETE FROM casino_rounds WHERE user_id=? AND game='blackjack'",[user.id]);
+  await run("INSERT INTO casino_rounds (user_id,game,state,created_at) VALUES (?,'blackjack',?,0)",[user.id,JSON.stringify({player:player.map(c),dealer:dealer.map(c),deck:deck.map(c),bet,insurance:0,acted:false})]);
+ }
+ await hand([14,10],[9,8],[]);
+ let view=await casinoState(user);assert.equal(view.rounds[0].dealer.length,1);assert.equal(view.rounds[0].deck,undefined);
+ const nat=await casinoPlay(user,{game:'blackjack',move:'stand'});assert.equal(nat.payout,250);
+ await hand([5,6],[10,7],[10]);
+ const doubled=await casinoPlay(user,{game:'blackjack',move:'double'});assert.equal(doubled.payout,400);assert.equal(doubled.round.bet,200);
+ await hand([2,3,4,5],[10,9],[2]);const charlie=await casinoPlay(user,{game:'blackjack',move:'hit'});assert.equal(charlie.payout,200);
+ await hand([10,9],[14,10],[]);await casinoPlay(user,{game:'blackjack',move:'insurance'});
+ view=await casinoState(user);
+ for(const key of ['blackjack_natural','blackjack_double','blackjack_charlie','blackjack_insurance'])assert.ok(view.awards.some(a=>a.award===key),key);
+ assert.equal(view.rounds.length,0);
+ await casinoPlay(user,{game:'blackjack',move:'stand'},400);
+});
+
+test('poker escrow protects hidden hands, draws once and pays a pot only once',async()=>{
+ const host=await account(),guest=await account(),observer=await account();
+ for(const u of [host,guest,observer])await run('UPDATE users SET level=8,cash=10000 WHERE id=?',[u.id]);
+ await casinoPlay(host,{game:'poker',move:'create',bet:1000});
+ let table=(await casinoState(host)).tables.find(t=>t.host_id===host.id);
+ await casinoPlay(host,{game:'poker',move:'join',table_id:table.id},400);
+ await casinoPlay(guest,{game:'poker',move:'join',table_id:table.id});
+ assert.equal((await stats(host)).cash,9000);assert.equal((await stats(guest)).cash,9000);
+ assert.equal((await casinoState(host)).wallet.tokens,75);assert.equal((await casinoState(guest)).wallet.tokens,75);
+ table=(await casinoState(host)).tables.find(t=>t.id===table.id);
+ assert.equal(table.hand.length,5);assert.equal(table.opponentHand,undefined);
+ assert.equal((await casinoState(observer)).tables.some(t=>t.id===table.id),false);
+ const c=(rank,suit)=>({rank,suit});
+ await run('UPDATE casino_tables SET state=? WHERE id=?',[JSON.stringify({deck:[],host:[10,11,12,13,14].map(r=>c(r,0)),guest:[2,3,4,5,7].map((r,i)=>c(r,i%4)),hostDone:false,guestDone:false}),table.id]);
+ await casinoPlay(observer,{game:'poker',move:'draw',table_id:table.id,hold:[]},400);
+ await casinoPlay(host,{game:'poker',move:'draw',table_id:table.id,hold:[0,1,2,3,4]});
+ await casinoPlay(host,{game:'poker',move:'draw',table_id:table.id,hold:[]},400);
+ await casinoPlay(guest,{game:'poker',move:'draw',table_id:table.id,hold:[0,1,2,3,4]});
+ table=(await casinoState(host)).tables.find(t=>t.id===table.id);
+ assert.equal(table.status,'finished');assert.equal(table.winner,host.id);assert.equal(table.payout,1900);assert.equal(table.opponentHand.length,5);
+ assert.equal((await stats(host)).cash,10900);assert.equal((await stats(guest)).cash,9000);
+ assert.equal((await query("SELECT value FROM casino_stats WHERE user_id=? AND stat='poker_score'",[host.id])).value,900);
+ await casinoPlay(guest,{game:'poker',move:'join',table_id:table.id},400);assert.equal((await stats(host)).cash,10900);
+});
+
+test('Russian Roulette competing joins cannot duplicate escrow or payout and table cancellation refunds cash',async()=>{
+ const host=await account(),a=await account(),b=await account();
+ for(const u of [host,a,b])await run('UPDATE users SET level=8,cash=10000 WHERE id=?',[u.id]);
+ await casinoPlay(host,{game:'roulette',move:'create',bet:1000});
+ const t=(await casinoState(host)).tables.find(t=>t.host_id===host.id);
+ const join=async u=>{
+  const response=await fetch(origin+'/casino/action',{method:'POST',headers:{Cookie:u.cookie,'Content-Type':'application/json'},body:JSON.stringify({game:'roulette',move:'join',table_id:t.id,request_id:require('node:crypto').randomUUID()})});
+  return {u,status:response.status,result:await response.json()};
+ };
+ const results=await Promise.all([join(a),join(b)]);assert.equal(results.filter(r=>r.status===200).length,1);
+ const guest=results.find(r=>r.status===200).u,loser=results.find(r=>r.status===400).u;
+ assert.equal((await stats(loser)).cash,10000);
+ assert.equal((await stats(host)).cash+(await stats(guest)).cash,19900);
+ assert.equal((await casinoState(host)).wallet.tokens,74);assert.equal((await casinoState(guest)).wallet.tokens,74);
+ await casinoPlay(host,{game:'poker',move:'create',bet:500});
+ const waiting=(await casinoState(host)).tables.find(t=>t.status==='waiting'&&t.host_id===host.id);
+ const before=(await stats(host)).cash;await casinoPlay(host,{game:'poker',move:'cancel',table_id:waiting.id});
+ assert.equal((await stats(host)).cash,before+500);
+});
+
+test('expired poker resolves drawn player once, and lottery settlement persists once across visits',async()=>{
+ const host=await account(),guest=await account();
+ for(const u of [host,guest])await run('UPDATE users SET level=8,cash=10000 WHERE id=?',[u.id]);
+ await casinoPlay(host,{game:'poker',move:'create',bet:1000});
+ const t=(await casinoState(host)).tables.find(t=>t.host_id===host.id);
+ await casinoPlay(guest,{game:'poker',move:'join',table_id:t.id});
+ await casinoPlay(host,{game:'poker',move:'draw',table_id:t.id,hold:[0,1,2,3,4]});
+ await run('UPDATE casino_tables SET expires_at=0 WHERE id=?',[t.id]);
+ await casinoState(guest);assert.equal((await stats(host)).cash,10900);await casinoState(host);assert.equal((await stats(host)).cash,10900);
+ await casinoPlay(host,{game:'lottery'});
+ const day=new Date().toISOString().slice(0,10);
+ await run("UPDATE casino_tickets SET day='2000-01-01' WHERE day=? AND user_id=?",[day,host.id]);
+ await run("UPDATE casino_lotteries SET day='2000-01-01' WHERE day=?",[day]);
+ const before=(await stats(host)).cash;await casinoState(guest);
+ assert.equal((await stats(host)).cash,before+900);await casinoState(host);assert.equal((await stats(host)).cash,before+900);
+ assert.equal((await query("SELECT winner_id FROM casino_lotteries WHERE day='2000-01-01'")).winner_id,host.id);
+ assert.ok((await casinoState(host)).awards.some(a=>a.award==='lottery_win'));
+});
+
+test('High-Low cashout is paid once',async()=>{
+ const user=await account();await run('UPDATE users SET level=8,cash=10000 WHERE id=?',[user.id]);
+ await casinoPlay(user,{game:'highlow',move:'start',bet:100});
+ let state=await casinoState(user);assert.ok(state.rounds.some(r=>r.game==='highlow'));
+ await casinoPlay(user,{game:'highlow',move:'cashout'});assert.equal((await stats(user)).cash,10000);
+ await casinoPlay(user,{game:'highlow',move:'cashout'},400);assert.equal((await stats(user)).cash,10000);
+});
+
+test('Bookie accepts only trusted open fixtures and settles verified results exactly once via operator import',async()=>{
+ const user=await account();await run('UPDATE users SET level=8,cash=10000 WHERE id=?',[user.id]);await casinoState(user);
+ await casinoPlay(user,{game:'bookie',event_id:'forged',selection:'a',bet:100},400);
+ const event={id:'sports-test',title:'Synthetic fixture for integration test',starts_at:Math.floor(Date.now()/1000)+60,options:[{id:'a',label:'Home',odds:1800},{id:'b',label:'Away',odds:2200}]};
+ await run('INSERT INTO casino_sports (id,title,starts_at,options) VALUES (?,?,?,?)',[event.id,event.title,event.starts_at,JSON.stringify(event.options)]);
+ await casinoPlay(user,{game:'bookie',event_id:event.id,selection:'a',bet:1000});
+ assert.equal((await stats(user)).cash,9000);assert.equal((await casinoState(user)).wallet.tokens,74);
+ // Set kickoff in the past and run the operator command with synthetic verified data.
+ event.starts_at=Math.floor(Date.now()/1000)-60;event.winner='a';
+ await run('UPDATE casino_sports SET starts_at=? WHERE id=?',[event.starts_at,event.id]);
+ const {writeFileSync}=require('node:fs');const file=path.join(temporary,'sports.json');writeFileSync(file,JSON.stringify([event]));
+ async function importResult(){
+  const p=spawn(process.execPath,['scripts/casino-sports.js',file],{cwd:root,env:{...process.env,DB_PATH:databasePath},stdio:['ignore','pipe','pipe']});
+  let logs='';p.stderr.on('data',d=>logs+=d);const [code]=await once(p,'exit');assert.equal(code,0,logs);
+ }
+ await importResult();assert.equal((await stats(user)).cash,10800);await importResult();assert.equal((await stats(user)).cash,10800);
+ await casinoPlay(user,{game:'bookie',event_id:event.id,selection:'a',bet:1000},400);
+ assert.equal((await query('SELECT settled FROM casino_sports_bets WHERE user_id=?',[user.id])).settled,1);
+});
+
+test('medical healing stacks cooldown, removes hospital time and respects the threshold atomically',async()=>{
+  const u=await account(), now=Math.floor(Date.now()/1000);
+  await run('UPDATE users SET hp=10,max_hp=1000,in_hospital=1,hospital_until=? WHERE id=?',[now+18000,u.id]);
+  await run("INSERT INTO inventory (user_id,item_key,item_type,quantity) VALUES (?,'torn_68','item',5)",[u.id]);
+  const first=await post(u,'/inventory/use',{item_key:'torn_68',item_type:'item'});
+  assert.equal(first.user.hp,60);assert.ok(Math.abs(first.user.hospital_until-(now+16800))<=2);
+  const second=await post(u,'/inventory/use',{item_key:'torn_68',item_type:'item'});
+  assert.equal(second.user.hp,110);assert.equal(second.readyAt-first.readyAt,600);
+  await run("UPDATE recovery_cooldowns SET ready_at=? WHERE user_id=? AND category='medical'",[Math.floor(Date.now()/1000)+21599,u.id]);
+  const results=await Promise.all([post(u,'/inventory/use',{item_key:'torn_68'}),post(u,'/inventory/use',{item_key:'torn_68'})]);
+  assert.equal(results.filter(r=>!r.error).length,1);assert.match(results.find(r=>r.error).error,/cooldown/);
+  assert.equal((await query('SELECT quantity FROM inventory WHERE user_id=?',[u.id])).quantity,2);
+  assert.equal((await fetch(origin+'/hospital',{headers:{Cookie:u.cookie}})).status,200);
+  assert.equal((await fetch(origin+'/inventory',{headers:{Cookie:u.cookie}})).status,200);
+});
+
+test('trained blood withdrawal creates typed blood, requires enough life and rejects incompatible transfusion',async()=>{
+  const u=await account();
+  await fetch(origin+'/hospital',{headers:{Cookie:u.cookie}});
+  await run("UPDATE medical_profiles SET blood_type='A+' WHERE user_id=?",[u.id]);
+  await run('UPDATE users SET max_hp=1000,hp=1000 WHERE id=?',[u.id]);
+  await run("INSERT INTO inventory (user_id,item_key,item_type,quantity) VALUES (?,'torn_731','item',2)",[u.id]);
+  assert.match((await post(u,'/inventory/use',{item_key:'torn_731'})).error,/Intravenous/);
+  await run("INSERT INTO education VALUES (?,'intravenous',0,1,2)",[u.id]);
+  const fill=await post(u,'/inventory/use',{item_key:'torn_731'});
+  assert.equal(fill.user.hp,700);assert.equal((await query("SELECT quantity FROM inventory WHERE user_id=? AND item_key='torn_732'",[u.id])).quantity,1);
+  const heal=await post(u,'/inventory/use',{item_key:'torn_732'});
+  assert.equal(heal.user.hp,1000);assert.equal(heal.readyAt-fill.readyAt,1800);
+  await run("INSERT INTO inventory (user_id,item_key,item_type) VALUES (?,'torn_734','item')",[u.id]);
+  assert.match((await post(u,'/inventory/use',{item_key:'torn_734'})).error,/incompatible/);
+  await run('UPDATE users SET hp=300 WHERE id=?',[u.id]);
+  assert.match((await post(u,'/inventory/use',{item_key:'torn_731'})).error,/more than 30%/);
+});
+
+test('Opium uses a separate drug timer, clears hospital and grants a temporary defense bonus without saving it',async()=>{
+  const u=await account(), now=Math.floor(Date.now()/1000);
+  await run('UPDATE users SET hp=10,in_hospital=1,hospital_until=?,defense=100 WHERE id=?',[now+10000,u.id]);
+  await run("INSERT INTO inventory (user_id,item_key,item_type,quantity) VALUES (?,'torn_200','drug',2)",[u.id]);
+  const used=await post(u,'/inventory/use',{item_key:'torn_200',item_type:'drug'});
+  assert.equal(used.user.hp,50);assert.equal(used.user.in_hospital,0);assert.equal(used.category,'drug');
+  assert.ok(used.readyAt>=now+7200 && used.readyAt<=now+10803);
+  assert.match((await post(u,'/inventory/use',{item_key:'torn_200'})).error,/cooldown/);
+  const state=await (await fetch(origin+'/api/stats',{headers:{Cookie:u.cookie}})).json();
+  assert.equal(state.defense,130);assert.equal((await stats(u)).defense,100);
+  await run('UPDATE users SET hp=40 WHERE id=?',[u.id]);
+  assert.ok(!(await post(u,'/infirmary/heal')).error);assert.equal((await stats(u)).defense,100);
+  await run('UPDATE medical_profiles SET opium_until=0 WHERE user_id=?',[u.id]);
+  assert.equal((await (await fetch(origin+'/api/stats',{headers:{Cookie:u.cookie}})).json()).defense,100);
+});
+
+test('radiation blocks ordinary hospital relief and drugs while Neumune reduces radiation and its hospital time',async()=>{
+  const u=await account(), now=Math.floor(Date.now()/1000);
+  await fetch(origin+'/hospital',{headers:{Cookie:u.cookie}});
+  await run('UPDATE medical_profiles SET radiation_until=? WHERE user_id=?',[now+86400,u.id]);
+  await run('UPDATE users SET hp=10,in_hospital=1,hospital_until=? WHERE id=?',[now+20000,u.id]);
+  for(const [key,type] of [['torn_66','item'],['torn_200','drug'],['torn_361','item']])await run('INSERT INTO inventory (user_id,item_key,item_type,quantity) VALUES (?,?,?,2)',[u.id,key,type]);
+  const normal=await post(u,'/inventory/use',{item_key:'torn_66'});assert.equal(normal.user.hospital_until,now+20000);assert.equal(normal.user.hp,25);
+  assert.match((await post(u,'/inventory/use',{item_key:'torn_200'})).error,/radiation/);
+  assert.match((await post(u,'/infirmary/bribe')).error,/Radiation/);
+  const treated=await post(u,'/inventory/use',{item_key:'torn_361'});
+  assert.ok(Math.abs(treated.user.hospital_until-(now+9200))<=2);
+  assert.equal((await query('SELECT radiation_until FROM medical_profiles WHERE user_id=?',[u.id])).radiation_until,now+43200);
+});
+
+test('revives enforce medical qualification, consent and energy then settle once for concurrent attempts',async()=>{
+  const reviver=await account(), patient=await account(), now=Math.floor(Date.now()/1000);
+  await run('UPDATE users SET in_hospital=1,hospital_until=?,hp=1 WHERE id=?',[now+9999,patient.id]);
+  assert.match((await post(reviver,'/infirmary/revive',{target_id:patient.id})).error,/Brain Surgeon/);
+  assert.match((await post(reviver,'/jobs/take',{job_key:'brain_surgeon'})).error,/DEF|Brain Surgery/);
+  await run('UPDATE users SET defense=100,energy=100,max_energy=100 WHERE id=?',[reviver.id]);
+  await run("INSERT INTO education VALUES (?,'brain_surgery',0,1,2)",[reviver.id]);
+  assert.ok(!(await post(reviver,'/jobs/take',{job_key:'brain_surgeon'})).error);
+  await post(patient,'/infirmary/preferences',{accepts_revives:false});
+  assert.match((await post(reviver,'/infirmary/revive',{target_id:patient.id})).error,/not accepting/);
+  assert.equal((await stats(reviver)).energy,100);
+  await post(patient,'/infirmary/preferences',{accepts_revives:true});
+  // Child server has Math.random=.99: a novice fails, skill 100 succeeds.
+  const failed=await post(reviver,'/infirmary/revive',{target_id:patient.id});
+  assert.equal(failed.success,false);assert.equal((await stats(reviver)).energy,25);assert.equal((await stats(patient)).in_hospital,1);
+  await run('UPDATE users SET energy=100 WHERE id=?',[reviver.id]);
+  await run('UPDATE medical_profiles SET revive_skill=100 WHERE user_id=?',[reviver.id]);
+  const results=await Promise.all([post(reviver,'/infirmary/revive',{target_id:patient.id}),post(reviver,'/infirmary/revive',{target_id:patient.id})]);
+  assert.equal(results.filter(r=>r.success).length,1);assert.equal((await stats(reviver)).energy,25);
+  assert.equal((await stats(patient)).hp,100);assert.equal((await stats(patient)).in_hospital,0);
+});
+
+test('faction medical upgrades authorize leaders, debit the bank and extend effectiveness and cooldown limits',async()=>{
+  const leader=await account(), member=await account();
+  await run('INSERT INTO gangs (name,tag,leader_id,bank) VALUES (?,?,?,2000000)',['Medics'+leader.id,'M'+leader.id,leader.id]);
+  const gang=await query('SELECT * FROM gangs WHERE leader_id=?',[leader.id]);
+  for(const u of [leader,member])await run('UPDATE users SET gang_id=? WHERE id=?',[gang.id,u.id]);
+  assert.match((await post(member,'/infirmary/faction-upgrade',{upgrade:'capacity'})).error,/leader/);
+  for(const key of ['capacity','effectiveness','reviver'])assert.ok(!(await post(leader,'/infirmary/faction-upgrade',{upgrade:key})).error);
+  assert.equal((await query('SELECT bank FROM gangs WHERE id=?',[gang.id])).bank,1250000);
+  await run("INSERT INTO education VALUES (?,'medical_training',0,1,2)",[member.id]);
+  await run('UPDATE users SET max_hp=1000,hp=10 WHERE id=?',[member.id]);
+  await run("INSERT INTO inventory (user_id,item_key,item_type,quantity) VALUES (?,'torn_68','item',2)",[member.id]);
+  await run("INSERT INTO recovery_cooldowns VALUES (?,'medical',?)",[member.id,Math.floor(Date.now()/1000)+22000]);
+  const heal=await post(member,'/inventory/use',{item_key:'torn_68'});
+  assert.equal(heal.user.hp,75); // 5% of 1000, with 20% education +10% faction
+  assert.match((await post(leader,'/infirmary/faction-upgrade',{upgrade:'__proto__'})).error,/Invalid/);
+});
+
+test('failed blood inventory writes roll back withdrawal and boosters are blocked in hospital',async()=>{
+  const u=await account();
+  await run("INSERT INTO education VALUES (?,'intravenous',0,1,2)",[u.id]);
+  await run("INSERT INTO inventory (user_id,item_key,item_type) VALUES (?,'torn_731','item')",[u.id]);
+  await run(`CREATE TRIGGER reject_blood BEFORE INSERT ON inventory WHEN NEW.user_id=${u.id} AND NEW.item_key BETWEEN 'torn_732' AND 'torn_739' BEGIN SELECT RAISE(ABORT,'test blood failure'); END`);
+  const response=await fetch(origin+'/inventory/use',{method:'POST',headers:{Cookie:u.cookie,'Content-Type':'application/json'},body:JSON.stringify({item_key:'torn_731'})});
+  assert.equal(response.status,500);
+  assert.equal((await stats(u)).hp,100);assert.equal((await query('SELECT quantity FROM inventory WHERE user_id=?',[u.id])).quantity,1);
+  assert.equal(await query('SELECT * FROM recovery_cooldowns WHERE user_id=?',[u.id]),undefined);
+  await run('DROP TRIGGER reject_blood');
+  await run('UPDATE users SET in_hospital=1,hospital_until=?,energy=0 WHERE id=?',[Math.floor(Date.now()/1000)+1000,u.id]);
+  await run("INSERT INTO inventory (user_id,item_key,item_type) VALUES (?,'energy_drink','item')",[u.id]);
+  assert.match((await post(u,'/inventory/use',{item_key:'energy_drink'})).error,/Boosters/);
+  assert.match((await post(u,'/gang/deposit',{amount:1})).error,/hospital/);
 });

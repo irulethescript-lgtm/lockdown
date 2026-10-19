@@ -28,12 +28,6 @@ async function pollTravel() {
     serverOffset=data.travel.now-Math.floor(Date.now()/1000);
     if(data.travel.phase!==travelState.phase || data.travel.revision!==travelState.revision){location.reload();return;}
     if(data.user)updateStats(data.user);
-    for(const stock of data.travel.stock){
-      const el=document.querySelector(`[data-stock="${stock.item_key}"]`);if(el)el.textContent=stock.quantity;
-      const input=document.getElementById('buy-'+stock.item_key);
-      if(input){const used=data.travel.cargo.reduce((sum,r)=>sum+r.quantity,0);const slots=data.travel.phase==='home'?50:data.travel.trip.capacity-used;const max=Math.max(0,Math.min(stock.quantity,slots,Math.floor(data.user.cash/Number(input.dataset.price))));input.max=max;input.nextElementSibling.disabled=max<1;}
-    }
-    document.querySelectorAll('[data-restock]').forEach(el=>el.dataset.restock=data.travel.stock[0].restock_at);
   } catch { /* Keep the last confirmed state; the next poll can recover. */ }
   finally{polling=false;}
 }
@@ -44,6 +38,7 @@ document.querySelectorAll('[data-travel-action]').forEach(button=>button.addEven
   if(button.dataset.destination)body.destination_id=Number(button.dataset.destination);
   if(button.dataset.item){
     body.item_key=button.dataset.item;
+    body.item_type=button.dataset.type;
     const input=document.getElementById((action==='buy'?'buy-':'sell-')+body.item_key);
     if(!input.reportValidity())return;
     body.quantity=Number(input.value);
@@ -59,3 +54,11 @@ document.querySelectorAll('[data-travel-action]').forEach(button=>button.addEven
 }));
 updateTravelClocks();setInterval(updateTravelClocks,1000);setInterval(pollTravel,5000);
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)pollTravel();});
+
+function filterOverseas(){
+ const q=document.getElementById('overseas-search').value.trim().toLowerCase();
+ const category=document.getElementById('overseas-category')?.value||'all';
+ document.querySelectorAll('[data-overseas-name]').forEach(row=>row.hidden=!row.dataset.overseasName.toLowerCase().includes(q)||(category!=='all'&&row.dataset.group!==category));
+}
+document.getElementById('overseas-search')?.addEventListener('input',filterOverseas);
+document.getElementById('overseas-category')?.addEventListener('change',filterOverseas);

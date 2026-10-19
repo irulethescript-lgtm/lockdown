@@ -7,6 +7,11 @@ const COURSES = [
   { key: 'anatomy', name: 'Applied Anatomy', track: 'Combat', cost: 2000, duration: 3600, requires: null, desc: 'Find weak spots. Permanently increases damage dealt by 8%.', perk: { damage: 8 } },
   { key: 'self_defense', name: 'Defensive Tactics', track: 'Combat', cost: 5000, duration: 10800, requires: 'anatomy', desc: 'Protect yourself. Permanently reduces incoming damage by 8%.', perk: { protection: 8 } },
 ];
+COURSES.push(
+  {key:'medical_training',name:'Medical Effectiveness',track:'Medical',cost:15000,duration:28800,requires:'anatomy',desc:'Improve medical healing and hospital time removal by 20%.',perk:{medical:20}},
+  {key:'intravenous',name:'Intravenous Therapy',track:'Medical',cost:10000,duration:14400,requires:'anatomy',desc:'Unlock filling and using compatible blood bags.',perk:{intravenous:1}},
+  {key:'brain_surgery',name:'Brain Surgery',track:'Medical',cost:50000,duration:86400,requires:'intravenous',desc:'Qualify for the Brain Surgeon job and unlock reviving when hired.',perk:{brainSurgery:1}}
+);
 const APPROACHES = [
   { key: 'cautious', name: 'Cautious', risk: -8, reward: 0.75, heat: 3, desc: 'Less risk, 75% cash, +3 heat' },
   { key: 'balanced', name: 'Balanced', risk: 0, reward: 1, heat: 6, desc: 'Standard risk and cash, +6 heat' },
@@ -18,7 +23,7 @@ const STANCES = {
   defensive: { name: 'Defensive', damage: 0.85, defense: 1.25 },
 };
 function getPerks(completedKeys = []) {
-  const perks = { crimeRisk: 0, crimeCash: 0, training: 0, damage: 0, protection: 0 };
+  const perks = { crimeRisk: 0, crimeCash: 0, training: 0, damage: 0, protection: 0, medical:0, intravenous:0, brainSurgery:0 };
   for (const course of COURSES.filter(c => completedKeys.includes(c.key))) {
     for (const [key, amount] of Object.entries(course.perk)) perks[key] += amount;
   }
@@ -34,6 +39,8 @@ function crimeQuote(crime, mastery, user, approach) {
   };
 }
 function recoveryGroup(item, type) {
+  const medical=require('./medical').rule(item);
+  if(medical)return {key:medical.opium?'drug':'medical',label:medical.opium?'Drug':'Medical',duration:medical.cooldown*60};
   if (type === 'drug' || item.permanent) return { key: 'drug', label: 'Drug', duration: 3600 };
   if (item.effect.energy || item.effect.nerve || item.effect.stamina) return { key: 'booster', label: 'Booster', duration: 900 };
   return { key: 'medical', label: 'Medical', duration: 300 };

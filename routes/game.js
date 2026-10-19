@@ -5,8 +5,12 @@ const { MISSIONS, ITEMS, CELL_AMENITIES, WEAPONS, ARMOR, GEAR, DRUGS, PRISONS, g
 const { progressionAction, getDailyProgress, recordActivity, getMastery, getGymProgress, GYMS } = require('../middleware/progression');
 const { COURSES, APPROACHES, STANCES, crimeQuote, recoveryGroup, simulateFight } = require('../middleware/dynamics');
 const { ROUTES: TRAVEL_ROUTES, GOODS, TRAVEL_ITEMS, BAGS, wholeNumber, getTravelPage, takeInventory, addInventory, receiveCollectible } = require('../middleware/travel');
-const { getItem, canBuyInPrison } = require('../middleware/item-catalog');
+const { getItem, canBuyInPrison, CATALOGS } = require('../middleware/item-catalog');
 const { RELAX_COST, RELAX_COOLDOWN, happinessMultiplier } = require('../middleware/city-life');
+const { describeItem, categoryCounts } = require('../middleware/item-view');
+const {shopItems,stockFor,debitStock,overseasCatalog} = require('../middleware/shops');
+const {HOMES,homeState}=require('../middleware/homes');
+const medical = require('../middleware/medical');
 const router = express.Router();
 
 function rnd(max) { return Math.floor(Math.random() * max); }
@@ -19,8 +23,10 @@ function statBlock(u) {
     strength: u.strength, defense: u.defense, speed: u.speed, dexterity: u.dexterity,
     happiness: u.happiness, max_happiness: u.max_happiness, relax_ready_at: u.relax_ready_at,
     criminal: u.criminal,
+    medical: {cap:u.medical?.cap,blood_type:u.medical?.blood_type,effectiveness:u.medical?.effectiveness}, cooldowns:u.cooldowns,
     stamina: u.stamina ?? 100, heat: u.heat || 0, perks: u.perks,
     wins: u.wins, losses: u.losses, travel: u.travel,
+    tokens: u.favors || 0,
     favors: u.favors || 0,
     job_key: u.job_key || null,
     in_hospital: u.in_hospital, hospital_until: u.hospital_until,
@@ -70,8 +76,14 @@ async function renderPage(res, view, user, extra = {}) {
 // ── HOME ──
 router.get('/', requireAuth, (req, res) => res.redirect('/city'));
 
+// ── PLAYER GUIDE ──
+router.get('/how-to', requireAuth, async (req, res) => {
+  const user = await getUser(req.session.userId);
+  await renderPage(res, 'how-to', user, { pageTitle: 'How To Play & Rules' });
+});
+
 // ── PRISON ──
-router.get('/prison', requireAuth, async (req, res) => {
+router.get(['/home','/prison'], requireAuth, async (req, res) => {
   const user = await getUser(req.session.userId);
   const prison = PRISONS.find(p => p.id === user.prison_id) || PRISONS[0];
   const daily = await getDailyProgress(user.id);
@@ -84,6 +96,59 @@ router.get('/prison', requireAuth, async (req, res) => {
   await renderPage(res, 'prison', user, { prison, daily, specialties, recentEvents, nextPrison, activeCourse, COURSES });
 });
 
+router.get('/newspaper',requireAuth,async(req,res,next)=>{
+ try{await renderPage(res,'newspaper',await getUser(req.session.userId));}catch(err){next(err);}
+});
+
+// ── CASINO ──
+const casino=require('../middleware/casino');
+router.get(['/casino','/points','/awards'],requireAuth,async(req,res,next)=>{
+ try{
+  const data=await withTransaction(tx=>casino.state(tx,req.session.userId));
+  const user=await getUser(req.session.userId);
+  await renderPage(res,'casino',user,{casino:data,section:req.path==='/points'?'points':req.path==='/awards'?'awards':'casino'});
+ }catch(err){next(err);}
+});
+router.get('/casino/state',requireAuth,async(req,res,next)=>{
+ try{res.json(await withTransaction(tx=>casino.state(tx,req.session.userId)));}catch(err){next(err);}
+});
+router.post('/casino/action',requireAuth,async(req,res,next)=>{
+ try{res.json(await withTransaction(tx=>casino.action(tx,req.session.userId,req.body)));}
+ catch(err){if(err instanceof casino.CasinoError)return res.status(400).json({error:err.message});next(err);}
+});
+
+// ── CITY MAP ──
+const {LOCATIONS,dailyFind}=require('../middleware/city-map');
+router.get('/city',requireAuth,async(req,res,next)=>{
+ try {
+  const user=await getUser(req.session.userId);
+  const find=await withTransaction(tx=>dailyFind(tx,user.id));
+  const foundItem=find.item_key&&!find.claimed?getItem(find.item_type,find.item_key):null;
+  await renderPage(res,'city',user,{locations:LOCATIONS,find,foundItem});
+ }catch(err){next(err);}
+});
+router.post('/city/collect',requireAuth,async(req,res,next)=>{
+ try {
+  const result=await withTransaction(async tx=>{
+   const user=await getUser(req.session.userId,tx);
+   if(user.travel?.phase!=='home')return {error:'Return home before collecting items in the city.'};
+   if(user.in_hospital||user.in_jail)return {error:'You must leave the hospital or jail before exploring the city.'};
+   const find=await dailyFind(tx,user.id);
+   if(!find.item_key||find.claimed)return {error:'There is no item to collect today.'};
+   const item=getItem(find.item_type,find.item_key);
+   if(!item)return {error:'This item is unavailable.'};
+   const changed=await tx.run('UPDATE city_daily_finds SET claimed=1 WHERE user_id=? AND day=? AND claimed=0',[user.id,find.day]);
+   if(!changed.changes)return {error:'This item has already been collected.'};
+   const existing=await tx.get('SELECT id FROM inventory WHERE user_id=? AND item_key=? AND item_type=?',[user.id,find.item_key,find.item_type]);
+   if(existing)await tx.run('UPDATE inventory SET quantity=quantity+1 WHERE id=?',[existing.id]);
+   else await tx.run('INSERT INTO inventory (user_id,item_key,item_type,quantity) VALUES (?,?,?,1)',[user.id,find.item_key,find.item_type]);
+   await tx.run("INSERT INTO events (user_id,type,message) VALUES (?,'city_find',?)",[user.id,'Found '+item.name+' while exploring the city.']);
+   return {msg:'You found '+item.name+'! It is now in your Items.',item:{name:item.name,key:find.item_key,type:find.item_type}};
+  });
+  res.json(result);
+ }catch(err){next(err);}
+});
+
 // ── ACCOUNT ──
 router.get('/account', requireAuth, async (req, res) => {
   const user = await getUser(req.session.userId);
@@ -94,63 +159,65 @@ router.get('/account', requireAuth, async (req, res) => {
 });
 
 // ── CELL ──
-router.get('/cell', requireAuth, async (req, res) => {
-  const user = await getUser(req.session.userId);
-  // Get placed amenities — include protected status
-  const placedRows   = await all('SELECT * FROM cell_amenities WHERE user_id=? AND placed_tile IS NOT NULL', [user.id]);
-  const unplacedRows = await all('SELECT * FROM cell_amenities WHERE user_id=? AND placed_tile IS NULL', [user.id]);
-  // Build placed map: tile -> amenity
-  const placedMap = {};
-  let augments = { max_hp: 0, strength: 0, defense: 0, speed: 0, max_energy: 0, max_nerve: 0, stamina: 0 };
-  placedRows.forEach(row => {
-    const amenity = CELL_AMENITIES[row.item_key];
-    if (amenity) {
-      // Include protected flag so cell view can show the lock icon
-      placedMap[row.placed_tile] = { ...amenity, key: row.item_key, db_id: row.id, protected: row.protected || 0 };
-      Object.entries(amenity.effect).forEach(([stat, val]) => { if (augments[stat] !== undefined) augments[stat] += val; });
-    }
-  });
-  // Cell grid size
-  const [cols, rows_count] = (user.cell_size || '8x12').split('x').map(Number);
-  const totalTiles = cols * rows_count;
-  await renderPage(res, 'cell', user, { placedMap, unplacedRows, augments, totalTiles, cols, CELL_AMENITIES });
+router.get('/cell', requireAuth, async(req,res,next)=>{
+  try {
+    const state=await withTransaction(tx=>homeState(tx,req.session.userId));
+    await renderPage(res,'cell',await getUser(req.session.userId),{...state,HOMES,CELL_AMENITIES});
+  }catch(err){next(err);}
 });
+router.post('/cell/buy-home',requireAuth,progressionAction(async(req,tx)=>{
+  const user=await getUser(req.session.userId,tx);
+  const home=HOMES.find(h=>h.key===req.body.home_key);
+  const state=await homeState(tx,user.id);
+  if(!home||home.price===0)return {error:'Choose a property for sale.'};
+  if(state.owned.some(h=>h.home_key===home.key))return {error:'You already own this property.'};
+  if(user.cash<home.price)return {error:'Not enough cash to buy this property.'};
+  await tx.run('UPDATE users SET cash=cash-? WHERE id=?',[home.price,user.id]);
+  await tx.run('INSERT INTO owned_homes (user_id,home_key) VALUES (?,?)',[user.id,home.key]);
+  return {msg:`Purchased ${home.name}. Choose Move in to make it your home.`};
+}));
+router.post('/cell/move-in',requireAuth,progressionAction(async(req,tx)=>{
+  const state=await homeState(tx,req.session.userId);
+  const home=HOMES.find(h=>h.key===req.body.home_key);
+  if(!home||!state.owned.some(h=>h.home_key===home.key))return {error:'Buy this home before moving in.'};
+  if(state.active.key===home.key)return {error:'You already live here.'};
+  if(state.furnishings.filter(f=>f.placed_tile!==null).length>home.capacity)return {error:'Put some furnishings into storage before moving to a smaller home.'};
+  await tx.run('UPDATE owned_homes SET active=0 WHERE user_id=?',[req.session.userId]);
+  await tx.run('UPDATE owned_homes SET active=1 WHERE user_id=? AND home_key=?',[req.session.userId,home.key]);
+  return {msg:`You now live in ${home.name}. Your furnishings have moved with you.`};
+}));
+router.post('/cell/buy-furnishing',requireAuth,progressionAction(async(req,tx)=>{
+  const item=Object.hasOwn(CELL_AMENITIES,req.body.item_key||'')?CELL_AMENITIES[req.body.item_key]:null;
+  if(!item||!Number.isSafeInteger(item.price)||item.price<=0)return {error:'Choose a furnishing for sale.'};
+  const user=await getUser(req.session.userId,tx);
+  if(user.cash<item.price)return {error:'Not enough cash.'};
+  await tx.run('UPDATE users SET cash=cash-? WHERE id=?',[item.price,user.id]);
+  await tx.run('INSERT INTO cell_amenities (user_id,item_key,quantity,protected) VALUES (?,?,1,1)',[user.id,req.body.item_key]);
+  return {msg:`Bought ${item.name}. Add it to your home from storage.`};
+}));
+router.post('/cell/place',requireAuth,progressionAction(async(req,tx)=>{
+  const id=wholeNumber(req.body.db_id);
+  const state=await homeState(tx,req.session.userId);
+  const item=state.furnishings.find(f=>f.id===id);
+  if(!item||!Object.hasOwn(CELL_AMENITIES,item.item_key))return {error:'Furnishing not found.'};
+  if(item.placed_tile!==null)return {error:'This furnishing is already in your home.'};
+  const placed=state.furnishings.filter(f=>f.placed_tile!==null);
+  if(placed.length>=state.active.capacity)return {error:'Your home is full. Store a furnishing or buy a larger home.'};
+  // Numeric placement slots remain internal so existing bonuses and saves stay valid.
+  let slot=0;while(placed.some(f=>f.placed_tile===slot))slot++;
+  await tx.run('UPDATE cell_amenities SET placed_tile=? WHERE id=? AND user_id=?',[slot,id,req.session.userId]);
+  return {ok:true,msg:'Furnishing added to your home.'};
+}));
+router.post('/cell/remove',requireAuth,progressionAction(async(req,tx)=>{
+  await tx.run('UPDATE cell_amenities SET placed_tile=NULL WHERE id=? AND user_id=?',[wholeNumber(req.body.db_id),req.session.userId]);
+  return {ok:true,msg:'Furnishing moved into storage.'};
+}));
+router.post('/cell/clear',requireAuth,progressionAction(async(req,tx)=>{
+  await tx.run('UPDATE cell_amenities SET placed_tile=NULL WHERE user_id=?',[req.session.userId]);
+  return {ok:true,msg:'All furnishings moved into storage.'};
+}));
 
-router.post('/cell/place', requireAuth, async (req, res) => {
-  const user = await getUser(req.session.userId);
-  const { db_id, tile } = req.body;
-  const amenity = await get('SELECT * FROM cell_amenities WHERE id=? AND user_id=?', [db_id, user.id]);
-  if (!amenity) return res.json({ error: 'Item not found.' });
-  // Check tile not already occupied
-  const occupied = await get('SELECT id FROM cell_amenities WHERE user_id=? AND placed_tile=?', [user.id, tile]);
-  if (occupied && occupied.id !== parseInt(db_id)) return res.json({ error: 'Tile already occupied.' });
-  await run('UPDATE cell_amenities SET placed_tile=? WHERE id=?', [tile, db_id]);
-  res.json({ ok: true });
-});
 
-router.post('/cell/remove', requireAuth, async (req, res) => {
-  const user = await getUser(req.session.userId);
-  const { db_id } = req.body;
-  await run('UPDATE cell_amenities SET placed_tile=NULL WHERE id=? AND user_id=?', [db_id, user.id]);
-  res.json({ ok: true });
-});
-
-router.post('/cell/clear', requireAuth, async (req, res) => {
-  const user = await getUser(req.session.userId);
-  await run('UPDATE cell_amenities SET placed_tile=NULL WHERE user_id=?', [user.id]);
-  res.json({ ok: true });
-});
-
-router.get('/cell-raids', requireAuth, async (req, res) => {
-  const user = await getUser(req.session.userId);
-  await renderPage(res, 'cell', user, {
-    placedMap: {}, unplacedRows: [], augments: { max_hp:0, strength:0, defense:0, speed:0, max_energy:0, max_nerve:0, stamina:0 },
-    totalTiles: 96, cols: 8, CELL_AMENITIES,
-    raidsView: true
-  });
-});
-
-// ── WARDEN OFFICE ──
 router.get('/warden', requireAuth, async (req, res) => {
   const user = await getUser(req.session.userId);
   await renderPage(res, 'warden_office', user);
@@ -224,7 +291,7 @@ router.post('/warden-amenities/buy', requireAuth, async (req, res) => {
   // Transaction log
   await run(`INSERT INTO transaction_logs (type,to_id,to_name,item_key,item_type,quantity,cash_amount,note) VALUES (?,?,?,?,?,1,0,?)`,
     ['warden_buy', user.id, user.username, item_key, 'amenity', `Broker purchase: ${amenity.name} for ${repCost} Rep`]).catch(()=>{});
-  res.json({ msg: `Purchased ${amenity.name}! It's protected (🔒) — cannot be raided. Go to My Property to place it.`, user: statBlock(user) });
+  res.json({ msg: `Purchased ${amenity.name}! Go to My Property to place it.`, user: statBlock(user) });
 });
 
 // ── WARDEN REP PURCHASE ──
@@ -304,7 +371,7 @@ router.get(['/prison/yard','/yard','/travel'], requireAuth, async (req,res,next)
       const user=await getUser(req.session.userId,tx);
       return {user,travel};
     });
-    await renderPage(res,'yard',data.user,{travel:data.travel,TRAVEL_ROUTES,GOODS});
+    await renderPage(res,'yard',data.user,{travel:data.travel,TRAVEL_ROUTES,GOODS,getItem});
   } catch(err) {next(err);}
 });
 router.get('/yard/state',requireAuth,async (req,res,next)=>{
@@ -322,7 +389,7 @@ router.post('/yard/depart',requireAuth,progressionAction(async(req,tx)=>{
   if(travel.phase!=='home') return {error:'Finish your current trip first.'};
   if(user.in_hospital || user.in_jail) return {error:'You cannot travel from jail or the hospital.'};
   const destination=TRAVEL_ROUTES.find(r=>r.id===wholeNumber(req.body.destination_id));
-  if(!destination || destination.id===user.prison_id) return {error:'Choose a city other than your home city.'};
+  if(!destination) return {error:'Choose a valid country.'};
   if(user.cash<destination.fare) return {error:`Need $${destination.fare} for the round-trip fare.`};
   const now=Math.floor(Date.now()/1000);
   await tx.run('UPDATE users SET cash=cash-? WHERE id=?',[destination.fare,user.id]);
@@ -335,23 +402,21 @@ router.post('/yard/depart',requireAuth,progressionAction(async(req,tx)=>{
 router.post('/yard/buy',requireAuth,progressionAction(async(req,tx)=>{
   const user=await getUser(req.session.userId,tx);
   const travel=await getTravelPage(user.id,tx);
-  if(!['home','visiting'].includes(travel.phase)) return {error:'Arrive at your destination before buying cargo.'};
-  const local=travel.phase==='home';
-  const good=GOODS.find(g=>g.key===req.body.item_key && g.prison===(local?user.prison_id:travel.trip.destination_id));
+  if(travel.phase!=='visiting')return {error:'Arrive abroad before buying cargo.'};
+  const good=travel.offers.find(g=>g.key===req.body.item_key && g.type===req.body.item_type);
   const quantity=wholeNumber(req.body.quantity);
-  if(!good || !Number.isSafeInteger(quantity) || quantity<1) return {error:'Choose a local item and a positive whole quantity.'};
+  if(!good || !Number.isSafeInteger(quantity) || quantity<1)return {error:'Choose a local item and a positive whole quantity.'};
   const used=travel.cargo.reduce((sum,row)=>sum+row.quantity,0);
-  if(local && quantity>50) return {error:'Buy at most 50 local souvenirs at a time.'};
-  if(!local && quantity>travel.trip.capacity-used) return {error:'Not enough cargo space. Each item uses one slot.'};
-  const stock=travel.stock.find(s=>s.item_key===good.key);
-  if(stock.quantity<quantity) return {error:'Not enough local stock. Wait for the next restock.'};
-  const cost=(local?good.sell:good.buy)*quantity;
-  if(user.cash<cost) return {error:`Need $${cost} for this cargo. Your return trip is already paid.`};
+  if(quantity>travel.trip.capacity-used)return {error:'Not enough cargo space. Each item uses one slot.'};
+  if(!good.available || good.quantity<quantity)return {error:'Not enough stock, or this limited offer has ended. Check the next hourly restock.'};
+  const cost=good.price*quantity;
+  if(!Number.isSafeInteger(cost)||user.cash<cost)return {error:'Not enough cash for this cargo.'};
+  if(!await debitStock(tx,'country:'+travel.trip.destination_id,good.type,good.key,quantity))return {error:'Stock changed. Refresh the shop.'};
   await tx.run('UPDATE users SET cash=cash-? WHERE id=?',[cost,user.id]);
-  await tx.run('UPDATE travel_stock SET quantity=quantity-? WHERE item_key=?',[quantity,good.key]);
-  if(local) await receiveCollectible(tx,user.id,good.key,quantity);
-  else await tx.run(`INSERT INTO travel_cargo (trip_id,item_key,quantity) VALUES (?,?,?) ON CONFLICT(trip_id,item_key) DO UPDATE SET quantity=quantity+excluded.quantity`,[travel.trip.id,good.key,quantity]);
-  return {msg:local ? `Collected ${quantity} × ${good.name} for $${cost} at the home exchange.` : `Packed ${quantity} × ${good.name} for $${cost}. Cargo will enter your inventory when you get home.`,travel:await getTravelPage(user.id,tx),user:statBlock(await getUser(user.id,tx))};
+  await tx.run(`INSERT INTO travel_cargo (trip_id,item_key,quantity) VALUES (?,?,?)
+    ON CONFLICT(trip_id,item_key) DO UPDATE SET quantity=quantity+excluded.quantity`,[travel.trip.id,good.type+':'+good.key,quantity]);
+  await tx.run("INSERT INTO transaction_logs (type,from_id,item_key,item_type,quantity,cash_amount,note) VALUES ('overseas_purchase',?,?,?,?,?,?)",[user.id,good.key,good.type,quantity,cost,'Country '+travel.trip.destination_id]);
+  return {msg:`Packed ${quantity} × ${good.name} for $${cost.toLocaleString()}. Delivered to your inventory when you return home.`,travel:await getTravelPage(user.id,tx),user:statBlock(await getUser(user.id,tx))};
 }));
 router.post('/yard/return',requireAuth,progressionAction(async(req,tx)=>{
   const travel=await getTravelPage(req.session.userId,tx);
@@ -660,55 +725,95 @@ router.get('/prison/infirmary', requireAuth, async (req, res) => {
   const timeLeft = Math.max(0, hospitalUntil - now);
   // Bribe cost = $500 base + $100 per minute remaining
   const bribeCost = user.in_hospital ? Math.max(500, Math.ceil(timeLeft / 60) * 1000) : 0;
-  await renderPage(res, 'infirmary', user, { icuList, timeLeft, bribeCost, now });
+  const medicalState=await medical.settings({get,run},user);
+  const cooldowns=await all('SELECT * FROM recovery_cooldowns WHERE user_id=?',[user.id]);
+  const supplies=(await all("SELECT * FROM inventory WHERE user_id=? AND item_type IN ('item','drug') AND quantity>0",[user.id]))
+    .map(row=>describeItem(row,cooldowns)).filter(row=>medical.rule(getItem(row.item_type,row.item_key)));
+  for(const patient of icuList) {
+    const p=await medical.profile({get,run},patient.id);
+    patient.accepts_revives=p.accepts_revives;
+  }
+  const factionLeader=user.gang_id?await get('SELECT id FROM gangs WHERE id=? AND leader_id=?',[user.gang_id,user.id]):null;
+  await renderPage(res, 'infirmary', user, { icuList, timeLeft, bribeCost, now, medicalState, cooldowns, supplies, factionLeader });
 });
 
-router.post('/infirmary/heal', requireAuth, async (req, res) => {
-  const user = await getUser(req.session.userId);
-  const cost = Math.ceil((user.max_hp - user.hp) * 2);
-  if (cost <= 0) return res.json({ error: 'Already full HP.' });
-  if (user.cash < cost) return res.json({ error: `Need $${cost} to heal.` });
-  user.cash -= cost; user.hp = user.max_hp;
-  await saveUser(user);
-  res.json({ msg: `Healed to full for $${cost}.`, user: statBlock(user) });
-});
-
-router.post('/infirmary/bribe', requireAuth, async (req, res) => {
-  const user = await getUser(req.session.userId);
-  if (!user.in_hospital) return res.json({ error: 'You are not in hospital.' });
-  const now = Math.floor(Date.now() / 1000);
-  const timeLeft = Math.max(0, (user.hospital_until || 0) - now);
-  const bribeCost = Math.max(500, Math.ceil(timeLeft / 60) * 1000);
-  if (user.cash < bribeCost) return res.json({ error: `Need $${bribeCost.toLocaleString()} to bribe your way out.` });
-  user.cash -= bribeCost;
-  user.in_hospital = 0;
-  user.hospital_until = 0;
-  user.hp = Math.max(user.hp, Math.ceil(user.max_hp * 0.3)); // restore to at least 30%
-  await saveUser(user);
-  res.json({ msg: `Bribed your way out for $${bribeCost.toLocaleString()}! You return to your property.`, user: statBlock(user) });
-});
-
+router.post('/infirmary/heal', requireAuth, progressionAction(async(req,tx)=>{
+  const user=await getUser(req.session.userId,tx);
+  if(user.in_hospital || user.in_jail || user.travel?.phase!=='home')return {error:'Use medical items while hospitalized; paid treatment is available at home after release.'};
+  const cost=Math.ceil((user.max_hp-user.hp)*2);
+  if(cost<=0)return {error:'Already full HP.'};
+  if(user.cash<cost)return {error:`Need $${cost} to heal.`};
+  user.cash-=cost;user.hp=user.max_hp;await saveUser(user,tx.run);
+  return {msg:`Healed to full for $${cost}.`,user:statBlock(user)};
+}));
+router.post('/infirmary/bribe',requireAuth,progressionAction(async(req,tx)=>{
+  const user=await getUser(req.session.userId,tx);
+  if(!user.in_hospital)return {error:'You are not in hospital.'};
+  const state=await medical.settings(tx,user);
+  if(state.radiation_until>Date.now()/1000)return {error:'Radiation poisoning requires Neumune treatment.'};
+  const cost=Math.max(500,Math.ceil((user.hospital_until-Math.floor(Date.now()/1000))/60)*1000);
+  if(user.cash<cost)return {error:`Need $${cost} for priority care.`};
+  user.cash-=cost;user.in_hospital=0;user.hospital_until=0;user.hospital_reason=null;
+  user.hp=Math.max(user.hp,Math.ceil(user.max_hp*.3));await saveUser(user,tx.run);
+  return {msg:`Priority care completed for $${cost}.`,user:statBlock(user)};
+}));
+router.post('/infirmary/preferences',requireAuth,progressionAction(async(req,tx)=>{
+  if(typeof req.body.accepts_revives!=='boolean')return {error:'Choose whether to accept revives.'};
+  await medical.profile(tx,req.session.userId);
+  await tx.run('UPDATE medical_profiles SET accepts_revives=? WHERE user_id=?',[Number(req.body.accepts_revives),req.session.userId]);
+  return {msg:'Revive preference saved.'};
+}));
+router.post('/infirmary/revive',requireAuth,progressionAction(async(req,tx)=>{
+  const user=await getUser(req.session.userId,tx), targetId=wholeNumber(req.body.target_id);
+  if(!Number.isSafeInteger(targetId) || targetId===user.id)return {error:'Choose another patient.'};
+  const state=await medical.settings(tx,user);
+  if(!state.revive_unlocked)return {error:'Qualify and work as a Brain Surgeon to unlock reviving.'};
+  if(user.in_hospital || user.in_jail || user.travel?.phase!=='home')return {error:'You must be at home and out of hospital and jail to revive.'};
+  const target=await getUser(targetId,tx);
+  if(!target || target.prison_id!==user.prison_id || target.travel?.phase!=='home' || !target.in_hospital)return {error:'That patient is unavailable.'};
+  const patient=await medical.settings(tx,target);
+  if(!patient.accepts_revives)return {error:'That patient is not accepting revives.'};
+  if(patient.radiation_until>Date.now()/1000)return {error:'Radiation poisoning requires Neumune treatment.'};
+  if(user.energy<state.reviveCost)return {error:`Need ${state.reviveCost} energy.`};
+  user.energy-=state.reviveCost;
+  const chance=Math.min(100,50+state.revive_skill/2), success=Math.random()*100<chance;
+  if(success){
+    target.in_hospital=0;target.hospital_until=0;target.hospital_reason=null;
+    target.hp=Math.max(1,Math.ceil(target.max_hp*state.revive_skill/100));
+    await saveUser(target,tx.run);
+    await tx.run('UPDATE medical_profiles SET revive_skill=MIN(100,revive_skill+1) WHERE user_id=?',[user.id]);
+    await tx.run("INSERT INTO events (user_id,type,message) VALUES (?,'medical',?)",[target.id,`${user.username} revived you.`]);
+  }
+  await saveUser(user,tx.run);
+  return {success,chance,msg:success?'Revive successful. Your skill increased.':'Revive failed. Energy was spent.',user:statBlock(user)};
+}));
+router.post('/infirmary/faction-upgrade',requireAuth,progressionAction(async(req,tx)=>{
+  const user=await getUser(req.session.userId,tx), key=req.body.upgrade;
+  if(!['capacity','effectiveness','reviver'].includes(key))return {error:'Invalid medical upgrade.'};
+  const gang=await tx.get('SELECT * FROM gangs WHERE id=? AND leader_id=?',[user.gang_id,user.id]);
+  if(!gang)return {error:'Only your faction leader can buy upgrades.'};
+  if(user.in_hospital || user.in_jail)return {error:'Leave hospital or jail before managing faction funds.'};
+  await tx.run('INSERT OR IGNORE INTO faction_medical (gang_id) VALUES (?)',[gang.id]);
+  const row=await tx.get('SELECT * FROM faction_medical WHERE gang_id=?',[gang.id]);
+  const cap=key==='reviver'?10:3, cost=(row[key]+1)*250000;
+  if(row[key]>=cap)return {error:'This upgrade is already at its maximum.'};
+  if(gang.bank<cost)return {error:`Your faction bank needs $${cost.toLocaleString()}.`};
+  await tx.run('UPDATE gangs SET bank=bank-? WHERE id=?',[cost,gang.id]);
+  await tx.run(`UPDATE faction_medical SET ${key}=${key}+1 WHERE gang_id=?`,[gang.id]);
+  return {msg:'Faction medical upgrade purchased.'};
+}));
 
 // ── MARKETPLACE ──
-// Market hall landing page
-router.get('/market', requireAuth, async (req, res) => {
-  const user = await getUser(req.session.userId);
-  await renderPage(res, 'market_hall', user, {});
-});
-
-router.get('/prison/marketplace', requireAuth, async (req, res) => {
-  const user = await getUser(req.session.userId);
-  const prisonId = user.prison_id || 1;
-  const prison = PRISONS.find(p => p.id === prisonId) || PRISONS[0];
-  const maxTier = Math.max(...prison.item_tiers);
-  const filterByTier = (obj, tiers) => Object.entries(obj).filter(([k,v]) => tiers.includes(v.tier||1));
-  const weaponItems = filterByTier(WEAPONS, prison.weapon_tiers);
-  const armorItems  = filterByTier(ARMOR,   prison.armor_tiers);
-  const gearItems   = filterByTier(GEAR,    prison.gear_tiers);
-  const basicItems  = Object.entries(ITEMS);
-  const drugItems   = Object.entries(DRUGS).filter(([k,v]) => (v.tier||1) <= maxTier);
-  const activeTab   = req.query.tab || 'weapons';
-  await renderPage(res, 'marketplace', user, { weaponItems, armorItems, gearItems, basicItems, drugItems, prison, maxTier, activeTab });
+router.get(['/market', '/prison/marketplace'], requireAuth, async (req, res, next) => {
+  try {
+    const stock = await withTransaction(tx => stockFor(tx,'home',shopItems()));
+    const user = await getUser(req.session.userId);
+    const rows = stock.filter(s=>s.available).map(s=>({
+      ...describeItem({item_type:s.type,item_key:s.key,quantity:1}),
+      stock:s.quantity,available:s.quantity>0,restockAt:s.restock_at,tier:1,
+    }));
+    await renderPage(res,'marketplace',user,{rows,categories:categoryCounts(rows),restockAt:stock[0]?.restock_at});
+  } catch(err) {next(err);}
 });
 
 router.post('/marketplace/buy', requireAuth, progressionAction(async (req, tx) => {
@@ -716,18 +821,21 @@ router.post('/marketplace/buy', requireAuth, progressionAction(async (req, tx) =
   const { item_key, item_type } = req.body;
   const item = getItem(item_type, item_key);
   if (!item || !['item','weapon','armor','gear','drug'].includes(item_type)) return { error: 'Choose a valid shop item and category.' };
-  if (!canBuyInPrison(item_type, item_key, user.prison_id)) return { error: 'This item is not stocked in your home city. Relocate to a city that stocks its tier, or trade with another player.' };
+  if (!canBuyInPrison(item_type, item_key, user.prison_id)) return { error: 'This item is unavailable in the shop. Check player listings for tradeable items.' };
   const quantity = wholeNumber(req.body.quantity === undefined ? 1 : req.body.quantity);
   if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > 100) return { error: 'Choose a whole quantity between 1 and 100.' };
-  const cost = item.price * quantity;
+  const stock = (await stockFor(tx,'home',[{...item,type:item_type,key:item_key}]))[0];
+  if(!stock.available || stock.quantity<quantity) return {error:'This item has sold out or rotated out. Check the market after the next hourly refresh.'};
+  const cost = stock.price * quantity;
   if (!Number.isSafeInteger(cost) || cost < 1) return { error: 'This item is not for sale here.' };
   if (user.cash < cost) return { error: `Need $${cost.toLocaleString()} to buy this.` };
+  if(!await debitStock(tx,'home',item_type,item_key,quantity)) return {error:'Stock changed. Refresh the market.'};
   await tx.run('UPDATE users SET cash=cash-? WHERE id=?', [cost, user.id]);
   const owned = await tx.get('SELECT id FROM inventory WHERE user_id=? AND item_key=? AND item_type=? ORDER BY id LIMIT 1', [user.id, item_key, item_type]);
   if (owned) await tx.run('UPDATE inventory SET quantity=quantity+? WHERE id=?', [quantity, owned.id]);
   else await tx.run('INSERT INTO inventory (user_id,item_key,item_type,quantity) VALUES (?,?,?,?)', [user.id, item_key, item_type, quantity]);
   await tx.run("INSERT INTO transaction_logs (type,from_id,item_key,item_type,quantity,cash_amount,note) VALUES ('shop_purchase',?,?,?,?,?,?)", [user.id,item_key,item_type,quantity,cost,'Prison marketplace purchase']);
-  return { msg: `Bought ${quantity} × ${item.name} for $${cost.toLocaleString()}.`, user: statBlock(await getUser(user.id, tx)) };
+  return { stock:stock.quantity-quantity, msg: `Bought ${quantity} × ${item.name} for $${cost.toLocaleString()}.`, user: statBlock(await getUser(user.id, tx)) };
 }));
 
 // ── BANK ──
@@ -913,10 +1021,21 @@ router.post('/equipment/equip', requireAuth, progressionAction(async (req, tx) =
 // ── INVENTORY ──
 router.get('/inventory', requireAuth, async (req, res) => {
   const user = await getUser(req.session.userId);
-  const invItems = await all("SELECT * FROM inventory WHERE user_id=? AND (item_type='item' OR item_type='drug')", [user.id]);
-  const collectibleCount=(await get("SELECT COALESCE(SUM(quantity),0) AS n FROM inventory WHERE user_id=? AND item_type='collectible'",[user.id])).n;
+  const owned = await all('SELECT * FROM inventory WHERE user_id=? AND quantity>0', [user.id]);
+  const furnishings = await all(
+    'SELECT item_key, COUNT(*) AS quantity FROM cell_amenities WHERE user_id=? AND placed_tile IS NULL GROUP BY item_key',
+    [user.id]
+  );
+  const equipped = await get('SELECT * FROM equipment WHERE user_id=?', [user.id]) || {};
   const cooldowns = await all('SELECT * FROM recovery_cooldowns WHERE user_id=?', [user.id]);
-  await renderPage(res, 'inventory', user, { invItems, ITEMS, DRUGS, cooldowns, recoveryGroup, collectibleCount, now: Math.floor(Date.now() / 1000) });
+  const rows = [...owned, ...furnishings.map(row => ({ ...row, item_type: 'amenity' }))]
+    .map(row => describeItem(row, cooldowns, equipped));
+  const medicalState=await medical.settings({get,run},user);
+  rows.forEach(row=>{if(row.group?.key==='medical')row.availableAt=medical.allowedAt('medical',row.readyAt,medicalState.cap);});
+  const loadout = ['weapon', 'armor', 'gear'].map(slot => ({
+    slot, item: rows.find(row => row.item_type === slot && row.equipped) || null,
+  }));
+  await renderPage(res, 'inventory', user, { rows, loadout, categories: categoryCounts(rows), cooldowns, medicalState });
 });
 
 router.post('/inventory/use', requireAuth, progressionAction(async (req, tx) => {
@@ -931,11 +1050,22 @@ router.post('/inventory/use', requireAuth, progressionAction(async (req, tx) => 
   const catalog = owned.item_type === 'drug' ? DRUGS : ITEMS;
   const item = Object.hasOwn(catalog, item_key) ? catalog[item_key] : null;
   if (!item || (!item.consumable && !item.permanent)) return { error: 'This item cannot be used directly.' };
-  if (user.in_jail) return { error: 'Items cannot be used in jail.' };
   const group = recoveryGroup(item, owned.item_type);
   const now = Math.floor(Date.now() / 1000);
+  if(user.travel?.phase!=='home')return {error:'Return home before using supplies.'};
+  if(group.key==='booster' && (user.in_hospital || user.in_jail))return {error:'Boosters cannot be used in hospital or jail.'};
+  const medState=await medical.settings(tx,user);
+  if(group.key==='drug' && medState.radiation_until>now)return {error:'Drugs cannot be used while suffering radiation poisoning.'};
+  const special=await medical.use(tx,user,item,now);
+  if(special) {
+    if(special.error)return special;
+    await tx.run('UPDATE inventory SET quantity=quantity-1 WHERE id=? AND quantity>0',[owned.id]);
+    await tx.run('DELETE FROM inventory WHERE id=? AND quantity=0',[owned.id]);
+    await saveUser(user,tx.run);
+    return {...special,user:statBlock(user)};
+  }
   const cooldown = await tx.get('SELECT ready_at FROM recovery_cooldowns WHERE user_id=? AND category=?', [user.id, group.key]);
-  if (cooldown?.ready_at > now) return { error: `${group.label} cooldown: wait ${Math.ceil((cooldown.ready_at - now) / 60)} minutes.`, readyAt: cooldown.ready_at };
+  if (medical.allowedAt(group.key,cooldown?.ready_at||0,medState.cap) > now) return { error: `${group.label} cooldown: wait ${Math.ceil((medical.allowedAt(group.key,cooldown.ready_at,medState.cap) - now) / 60)} minutes.`, readyAt: cooldown.ready_at };
   const e = item.effect;
   const before = JSON.stringify([user.hp, user.energy, user.nerve, user.stamina, user.strength, user.defense, user.speed]);
   for (const [stat, max] of [['hp', 'max_hp'], ['energy', 'max_energy'], ['nerve', 'max_nerve']]) {
@@ -948,9 +1078,9 @@ router.post('/inventory/use', requireAuth, progressionAction(async (req, tx) => 
   await tx.run('UPDATE inventory SET quantity=quantity-1 WHERE id=?', [owned.id]);
   await tx.run('DELETE FROM inventory WHERE id=? AND quantity=0', [owned.id]);
   await tx.run(`INSERT INTO recovery_cooldowns (user_id,category,ready_at) VALUES (?,?,?)
-    ON CONFLICT(user_id,category) DO UPDATE SET ready_at=excluded.ready_at`, [user.id, group.key, now + group.duration]);
+    ON CONFLICT(user_id,category) DO UPDATE SET ready_at=excluded.ready_at`, [user.id, group.key, (group.key==='medical'?Math.max(now,cooldown?.ready_at||0):now) + group.duration]);
   await saveUser(user, tx.run);
-  return { msg: `Used ${item.name}! ${group.label} recovery: ${group.duration / 60} minutes.`, user: statBlock(user), category: group.key, readyAt: now + group.duration };
+  return { msg: `Used ${item.name}! ${group.label} recovery: ${group.duration / 60} minutes.`, user: statBlock(user), category: group.key, readyAt: (group.key==='medical'?Math.max(now,cooldown?.ready_at||0):now) + group.duration };
 }));
 
 router.post('/inventory/drop', requireAuth, async (req, res) => {
@@ -964,6 +1094,7 @@ router.post(['/inventory/list','/openmarket/list'], requireAuth, progressionActi
   const user=await getUser(req.session.userId,tx);
   const {item_key,item_type}=req.body;
   const price=wholeNumber(req.body.price),qty=wholeNumber(req.body.quantity ?? 1);
+  if (getItem(item_type, item_key)?.tradeable === false) return { error: 'This item cannot be traded.' };
   if(!['item','drug','weapon','armor','gear','collectible','amenity'].includes(item_type) || typeof item_key!=='string' || !Number.isSafeInteger(price) || price<1 || price>1000000000 || !Number.isSafeInteger(qty) || qty<1 || qty>1000000) return {error:'Enter a valid item, whole quantity and total asking price.'};
   if(item_type==='collectible') {
     if(!Object.hasOwn(TRAVEL_ITEMS,item_key) || !await takeInventory(tx,user.id,item_key,qty)) return {error:'You do not own enough of that collectible.'};
@@ -1068,6 +1199,8 @@ router.post('/jobs/take', requireAuth, async (req, res) => {
   const job = prisonJobs.find(j => j.key === job_key);
   if (!job) return res.json({ error: 'Invalid job.' });
   if (user.defense < job.req_def) return res.json({ error: `Need ${job.req_def} DEF for this job.` });
+  if(job.key==='brain_surgeon' && !user.perks?.brainSurgery)return res.json({error:'Complete Brain Surgery education first.'});
+  if(job.key==='brain_surgeon'){await medical.profile({get,run},user.id);await run('UPDATE medical_profiles SET revive_unlocked=1 WHERE user_id=?',[user.id]);}
   await run('UPDATE users SET job_key=?, job_prison_id=?, last_daily_pay=? WHERE id=?',
     [job.key, user.prison_id, Math.floor(Date.now()/1000), user.id]);
   res.json({ msg: `You're now working as: ${job.name}. Pay of $${job.base_pay}+ deposited automatically every 24 hours.` });
@@ -1139,116 +1272,10 @@ router.post('/spy', requireAuth, async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════
-// ── CELL RAIDING ──
-// ═══════════════════════════════════════════════════════════
-router.get('/raid/:username', requireAuth, async (req, res) => {
-  const user   = await getUser(req.session.userId);
-  const target = await get('SELECT id,username,prison_id FROM users WHERE username=? COLLATE NOCASE', [req.params.username]);
-  if (!target) return res.redirect('/inmates');
-  if (target.prison_id !== user.prison_id) return res.redirect('/inmates');
-  const now = Math.floor(Date.now()/1000);
-  const cd  = await get('SELECT last_raid FROM raid_cooldowns WHERE raider_id=? AND target_id=?', [user.id, target.id]).catch(()=>null);
-  const cdLeft = cd ? Math.max(0, 1800 - (now - cd.last_raid)) : 0;
-  // Previous attempts this session (cleared when target changes combo)
-  const prevAttempts = await all('SELECT combo_tried,correct_positions FROM raid_attempts WHERE raider_id=? AND target_id=? ORDER BY created_at DESC LIMIT 8', [user.id, target.id]).catch(()=>[]);
-  // Get combo length (may have been extended by target)
-  const comboRow = await get('SELECT combo FROM cell_combos WHERE user_id=?', [target.id]).catch(()=>null);
-  const combo = comboRow?.combo || '12345';
-  await renderPage(res, 'raid', user, { target, cdLeft, prevAttempts, comboLength: combo.length });
-});
+// Retired features reject stale clients without changing saved state.
+router.all(['/raid/:username', '/raid/attempt', '/cell/change-combo', '/property/change-combo', '/cell-raids'], requireAuth, (req,res) =>
+  res.status(410).json({error:'Raids and home combinations have been removed.'}));
 
-router.post('/raid/attempt', requireAuth, async (req, res) => {
-  const user = await getUser(req.session.userId);
-  const { target_id, combo_try } = req.body;
-  const tid = parseInt(target_id);
-  if (user.nerve < 10) return res.json({ error: 'Need 10 Nerve to raid.' });
-  if (user.in_hospital || user.in_jail) return res.json({ error: "You can't raid from here." });
-  const now = Math.floor(Date.now()/1000);
-  const cd  = await get('SELECT last_raid FROM raid_cooldowns WHERE raider_id=? AND target_id=?', [user.id, tid]).catch(()=>null);
-  if (cd && now - cd.last_raid < 1800) {
-    const wait = Math.ceil((1800 - (now - cd.last_raid)) / 60);
-    return res.json({ error: `Wait ${wait} more minute${wait!==1?'s':''} before raiding again.` });
-  }
-
-  const target = await getUser(tid);
-  if (!target || target.prison_id !== user.prison_id) return res.json({ error: 'Invalid target.' });
-
-  const comboRow = await get('SELECT combo FROM cell_combos WHERE user_id=?', [tid]).catch(()=>null);
-  const realCombo = comboRow?.combo || '12345';
-  const tryStr = String(combo_try).slice(0, realCombo.length);
-
-  // Mark correct digits (green = right digit right position)
-  const correctPos = [];
-  for (let i = 0; i < realCombo.length; i++) {
-    correctPos.push(tryStr[i] === realCombo[i] ? 'correct' : (realCombo.includes(tryStr[i]) ? 'present' : 'wrong'));
-  }
-
-  user.nerve -= 10;
-  await run('INSERT OR REPLACE INTO raid_cooldowns VALUES (?,?,?)', [user.id, tid, now]);
-  await run('INSERT INTO raid_attempts (raider_id,target_id,combo_tried,correct_positions) VALUES (?,?,?,?)',
-    [user.id, tid, tryStr, JSON.stringify(correctPos)]).catch(()=>{});
-
-  if (tryStr === realCombo) {
-    // SUCCESS — loot the cell
-    user.xp += 30 + target.level * 5;
-    let loot = [];
-    // Steal cash from bank (10-25%)
-    const bankSteal = Math.floor(target.bank * (0.1 + Math.random() * 0.15));
-    if (bankSteal > 0) {
-      await run('UPDATE users SET bank=MAX(0,bank-?) WHERE id=?', [bankSteal, tid]);
-      user.cash += bankSteal;
-      loot.push(`$${bankSteal} from bank`);
-    }
-    // Steal unprotected cell items (5-7% chance per item)
-    const placed = await all('SELECT * FROM cell_amenities WHERE user_id=? AND placed_tile IS NOT NULL AND protected=0', [tid]);
-    for (const item of placed) {
-      if (Math.random() < 0.06) {
-        await run('DELETE FROM cell_amenities WHERE id=?', [item.id]);
-        const ex = await get('SELECT id,quantity FROM cell_amenities WHERE user_id=? AND item_key=?', [user.id, item.item_key]);
-        if (ex) await run('UPDATE cell_amenities SET quantity=quantity+1 WHERE id=?', [ex.id]);
-        else await run('INSERT INTO cell_amenities (user_id,item_key,quantity,protected) VALUES (?,?,1,0)', [user.id, item.item_key]);
-        loot.push(item.item_key.replace(/_/g,' '));
-      }
-    }
-    // Warden resets combo after successful raid
-    const newCombo = Array.from({length: realCombo.length}, () => rnd(10)).join('');
-    await run('INSERT OR REPLACE INTO cell_combos VALUES (?,?)', [tid, newCombo]);
-    await run('DELETE FROM raid_attempts WHERE raider_id=? AND target_id=?', [user.id, tid]);
-
-    await addEvent(tid, 'raided', `${user.username} cracked your cell combination and raided your cell! Lost: ${loot.join(', ') || 'nothing valuable'}.`);
-    const lvlUp = await levelUpCheck(user, run);
-    await saveUser(user);
-    return res.json({ success: true, cracked: true, loot, msg: `Cell cracked! Looted: ${loot.join(', ') || 'nothing valuable'}.`, correctPos, user: statBlock(user), levelUp: lvlUp });
-  }
-
-  // WRONG COMBO — maybe caught
-  const caughtChance = 35;
-  const escaped = Math.random() * 100 > caughtChance;
-  await saveUser(user);
-  if (!escaped) {
-    const isoTime = 180 + rnd(180);
-    await run('UPDATE users SET in_jail=1, jail_until=?, jail_reason=? WHERE id=?',
-      [now + isoTime, `Caught raiding ${target.username}'s cell`, user.id]);
-    return res.json({ success: false, cracked: false, caught: true, correctPos, msg: `Wrong combo — you were caught! Isolation for ${Math.ceil(isoTime/60)} minutes.`, user: statBlock(user) });
-  }
-  return res.json({ success: false, cracked: false, caught: false, correctPos, msg: 'Wrong combo — but you slipped away.', user: statBlock(user) });
-});
-
-router.post('/cell/change-combo', requireAuth, async (req, res) => {
-  const user = await getUser(req.session.userId);
-  const { new_combo } = req.body;
-  if (!new_combo || !/^[a-zA-Z0-9]{4,8}$/.test(new_combo))
-    return res.json({ error: 'Combo must be 4-8 alphanumeric characters.' });
-  const cost = 500;
-  if (user.cash < cost) return res.json({ error: `Costs $${cost} to change your combo.` });
-  user.cash -= cost;
-  await saveUser(user);
-  await run('INSERT OR REPLACE INTO cell_combos VALUES (?,?)', [user.id, new_combo]);
-  await run('DELETE FROM raid_attempts WHERE target_id=?', [user.id]);
-  res.json({ msg: `Combo changed to: ${new_combo}. Previous raid attempts erased.`, user: statBlock(user) });
-});
-
-// ═══════════════════════════════════════════════════════════
 // ── SEND MONEY ──
 // ═══════════════════════════════════════════════════════════
 router.get('/send-money', requireAuth, async (req, res) => {
@@ -1279,95 +1306,56 @@ router.post('/send-money', requireAuth, async (req, res) => {
 // ═══════════════════════════════════════════════════════════
 // ── FAVORS ──
 // ═══════════════════════════════════════════════════════════
-router.post('/favors/vote', requireAuth, async (req, res) => {
-  const user = await getUser(req.session.userId);
-  const now  = Math.floor(Date.now()/1000);
-  const lastVote = user.last_daily_pay || 0; // reuse field for simplicity — we'll use a new one
-  // Use a dedicated tracking: check events for today's vote
-  const todayVote = await get("SELECT id FROM events WHERE user_id=? AND type='vote' AND created_at > ?",
-    [user.id, now - 86400]).catch(()=>null);
-  if (todayVote) return res.json({ error: 'Already claimed your daily vote favor. Come back tomorrow!' });
-  user.favors = (user.favors || 0) + 1;
-  await run('UPDATE users SET favors=? WHERE id=?', [user.favors, user.id]);
-  await run("INSERT INTO events (user_id,type,message) VALUES (?,'vote','Earned 1 favor from voting.')", [user.id]);
-  res.json({ msg: '+1 Favor earned! Thanks for voting.', favors: user.favors });
+router.post(['/tokens/vote', '/favors/vote'], requireAuth, async (req, res) => {
+  try {
+    const result = await withTransaction(async tx => {
+      const id = req.session.userId;
+      const now = Math.floor(Date.now()/1000);
+      const claimed = await tx.get("SELECT id FROM events WHERE user_id=? AND type='vote' AND created_at > ?", [id, now - 86400]);
+      if (claimed) return {error:'Already claimed your daily Token. Come back tomorrow!'};
+      await tx.run('UPDATE users SET favors=COALESCE(favors,0)+1 WHERE id=?',[id]);
+      await tx.run("INSERT INTO events (user_id,type,message) VALUES (?,'vote','Earned 1 Token from voting.')",[id]);
+      const user = await tx.get('SELECT favors FROM users WHERE id=?',[id]);
+      return {msg:'+1 Token earned! Thanks for voting.', tokens:user.favors, favors:user.favors};
+    });
+    res.json(result);
+  } catch (err) { res.status(500).json({error:'Unable to claim Token. Please try again.'}); }
 });
 
 // ── PRISON TRANSPORT ──
-router.get('/transport', requireAuth, async (req, res) => {
-  const user = await getUser(req.session.userId);
-  const WEAPONS_LIST = Object.entries(WEAPONS).map(([k,v])=>({key:k,...v}));
-  await renderPage(res, 'transport', user, { PRISONS, WEAPONS_LIST });
-});
-
-router.post('/transport/move', requireAuth, progressionAction(async (req, tx) => {
-  const user = await getUser(req.session.userId, tx);
-  const id = wholeNumber(req.body.prison_id);
-  const city = PRISONS.find(p => p.id === id);
-  if (!city) return { error: 'Invalid city.' };
-  if (user.in_jail || user.in_hospital) return { error: 'Recover before relocating.' };
-  if (user.level < city.level_req) return { error: `Requires Level ${city.level_req}.` };
-  if ((user.prison_id || 1) === city.id) return { error: 'You already live in this city.' };
-  const cost = ({1:0,2:2000,3:5000,4:12000,5:35000})[city.id];
-  if (user.cash < cost) return { error: `Need $${cost.toLocaleString()} to relocate.` };
-  const previousBank = user.bank || 0;
-  user.cash += previousBank - cost;
-  user.bank = 0;
-  user.job_key = null;
-  user.job_prison_id = null;
-  const listings = await tx.all('SELECT * FROM open_market WHERE seller_id=? AND active=1', [user.id]);
-  for (const listing of listings) {
-    await tx.run('UPDATE open_market SET active=0 WHERE id=?', [listing.id]);
-    const owned = await tx.get('SELECT id FROM inventory WHERE user_id=? AND item_key=? AND item_type=? ORDER BY id LIMIT 1', [user.id, listing.item_key, listing.item_type]);
-    if (owned) await tx.run('UPDATE inventory SET quantity=quantity+? WHERE id=?', [listing.quantity, owned.id]);
-    else await tx.run('INSERT INTO inventory (user_id,item_key,item_type,quantity) VALUES (?,?,?,?)', [user.id, listing.item_key, listing.item_type, listing.quantity]);
-  }
-  await tx.run('UPDATE cell_amenities SET placed_tile=NULL WHERE user_id=?', [user.id]);
-  const combo = Array.from({length:5}, () => rnd(10)).join('');
-  await tx.run('INSERT OR REPLACE INTO cell_combos VALUES (?,?)', [user.id, combo]);
-  await tx.run('DELETE FROM raid_attempts WHERE target_id=?', [user.id]);
-  user.cell_size = city.max_cell;
-  await tx.run('UPDATE users SET prison_id=? WHERE id=?', [city.id, user.id]);
-  await saveUser(user, tx.run);
-  const notes = [
-    `Relocated to ${city.name}.`, `Moving fee: $${cost.toLocaleString()}.`,
-    listings.length ? `${listings.length} market listings returned to your inventory.` : null,
-    previousBank ? `$${previousBank.toLocaleString()} moved from your bank to cash.` : null,
-    'Your old job ended. Furnishings are kept in storage; place them in your new property.',
-    `Property lock reset. New property size: ${city.max_cell}.`,
-  ].filter(Boolean).join(' ');
-  await tx.run("INSERT INTO events (user_id,type,message) VALUES (?,'transport',?)", [user.id, notes]);
-  return {msg:notes,redirect:'/city',user:statBlock(await getUser(user.id,tx))};
-}));
-
+router.get('/transport', requireAuth, (req,res)=>res.redirect('/airport'));
+router.post('/transport/move', requireAuth, (req,res)=>res.json({error:'Permanent relocation is closed. Use the Airport to travel.'}));
 
 // ── SURGEON ──
-const { AVATAR_CATEGORIES, AVATAR_PARTS, DEFAULT_AVATAR } = require('../middleware/avatardata');
+const { AVATAR_CATEGORIES, AVATAR_PARTS, DEFAULT_AVATAR, STARTER_AVATARS, cleanAvatar } = require('../middleware/avatardata');
 
 router.get('/surgeon', requireAuth, async (req, res) => {
   const user = await getUser(req.session.userId);
   const presets = await all('SELECT * FROM avatar_presets WHERE user_id=? ORDER BY slot', [user.id]);
-  const presetsData = presets.map(p => ({ ...p, layers: JSON.parse(p.layers || '{}') }));
+  const presetsData = presets.map(p => ({ ...p, layers: cleanAvatar(p.layers) }));
   const unlockRows = await all('SELECT item_key FROM surgeon_unlocks WHERE user_id=?', [user.id]);
   const unlocked = unlockRows.map(r => r.item_key);
-  let currentAvatar = DEFAULT_AVATAR;
-  if (user.avatar) {
-    try { currentAvatar = { ...DEFAULT_AVATAR, ...JSON.parse(user.avatar) }; } catch(e) {}
-  }
+  const currentAvatar = cleanAvatar(user.avatar);
   await renderPage(res, 'surgeon', user, {
-    AVATAR_CATEGORIES, AVATAR_PARTS, DEFAULT_AVATAR,
+    AVATAR_CATEGORIES, AVATAR_PARTS, DEFAULT_AVATAR, STARTER_AVATARS,
     presets, presetsData, unlocked, currentAvatar
   });
+});
+
+router.post('/surgeon/starter', requireAuth, async (req, res, next) => {
+  try {
+    const preset = STARTER_AVATARS.find(p => p.id === req.body.id);
+    if (!preset) return res.status(400).json({ error: 'Choose a starter character.' });
+    await run('UPDATE users SET avatar=? WHERE id=?', [JSON.stringify(preset.layers), req.session.userId]);
+    res.json({ ok: true });
+  } catch (err) { next(err); }
 });
 
 router.post('/surgeon/save', requireAuth, async (req, res) => {
   const user = await getUser(req.session.userId);
   const { layers } = req.body;
   if (!layers || typeof layers !== 'object') return res.json({ error: 'Invalid data.' });
-  // Only save keys that exist in categories
-  const validKeys = Object.keys(DEFAULT_AVATAR);
-  const clean = {};
-  validKeys.forEach(k => { if (layers[k]) clean[k] = layers[k]; });
+  const clean = cleanAvatar(layers);
   await run('UPDATE users SET avatar=? WHERE id=?', [JSON.stringify(clean), user.id]);
   res.json({ ok: true, msg: 'Avatar saved!' });
 });
@@ -1375,9 +1363,9 @@ router.post('/surgeon/save', requireAuth, async (req, res) => {
 router.post('/surgeon/preset/save', requireAuth, async (req, res) => {
   const user = await getUser(req.session.userId);
   const { slot, layers } = req.body;
-  if (!slot || slot < 1 || slot > 5) return res.json({ error: 'Invalid slot.' });
+  if (!Number.isInteger(slot) || slot < 1 || slot > 10) return res.json({ error: 'Invalid slot.' });
   await run('INSERT OR REPLACE INTO avatar_presets (user_id, slot, layers) VALUES (?,?,?)',
-    [user.id, slot, JSON.stringify(layers)]);
+    [user.id, slot, JSON.stringify(cleanAvatar(layers))]);
   res.json({ ok: true });
 });
 

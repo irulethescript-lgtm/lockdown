@@ -321,6 +321,8 @@ async function getUser(id, store) {
   u._cellAugments = aug;
   u._equipmentAugments = gear;
   u._augments = Object.fromEntries(Object.keys(aug).map(key => [key, aug[key] + gear[key]]));
+  const medicalProfile = await get('SELECT opium_until FROM medical_profiles WHERE user_id=?',[id]);
+  if(medicalProfile?.opium_until>Math.floor(Date.now()/1000)) u._augments.defense+=Math.floor((u.defense+u._augments.defense)*.3);
   u._effectiveStats = {};
   for (const [stat, baseKey] of Object.entries({ max_hp:'_baseMaxHp', max_energy:'_baseMaxEnergy', max_nerve:'_baseMaxNerve', strength:'_baseStrength', defense:'_baseDefense', speed:'_baseSpeed', dexterity:'_baseDexterity' })) {
     u[baseKey] = u[stat];
@@ -335,6 +337,8 @@ async function getUser(id, store) {
   const { getPerks, getHeat } = require('./dynamics');
   const courses = await all('SELECT course_key FROM education WHERE user_id=? AND completed_at IS NOT NULL', [id]);
   u.perks = getPerks(courses.map(row => row.course_key));
+  u.medical = await require('./medical').settings(store,u);
+  u.cooldowns = await all('SELECT category,ready_at FROM recovery_cooldowns WHERE user_id=?',[id]);
   u.heat = getHeat(await get('SELECT * FROM player_dynamics WHERE user_id=?', [id]));
   await regenStats(u, store);
   return u;
@@ -581,5 +585,60 @@ db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS travel_discoveries (
     user_id INTEGER NOT NULL REFERENCES users(id),item_key TEXT NOT NULL,
     first_found INTEGER NOT NULL,total_brought INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(user_id,item_key)
+  )`);
+});
+
+// Persistent shop inventories and owned homes. Existing saves receive additive tables.
+db.serialize(() => {
+  db.run(`CREATE TABLE IF NOT EXISTS rotating_stock (
+    scope TEXT NOT NULL,item_type TEXT NOT NULL,item_key TEXT NOT NULL,
+    quantity INTEGER NOT NULL CHECK(quantity>=0),price INTEGER NOT NULL,
+    active INTEGER NOT NULL,restock_at INTEGER NOT NULL,expires_at INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(scope,item_type,item_key)
+  )`);
+  db.run(`CREATE TABLE IF NOT EXISTS owned_homes (
+    user_id INTEGER NOT NULL,home_key TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(user_id,home_key)
+  )`);
+  db.run('CREATE UNIQUE INDEX IF NOT EXISTS one_active_home ON owned_homes(user_id) WHERE active=1');
+});
+
+// Persist successful and unsuccessful city rolls for each UTC date.
+db.serialize(() => {
+  db.run(`CREATE TABLE IF NOT EXISTS city_daily_finds (
+    user_id INTEGER NOT NULL,day TEXT NOT NULL,item_type TEXT,item_key TEXT,
+    x INTEGER NOT NULL,y INTEGER NOT NULL,claimed INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(user_id,day)
+  )`);
+});
+
+// Casino balances, server-owned rounds and escrow survive restarts.
+db.serialize(() => {
+ for (const sql of [
+  "CREATE TABLE IF NOT EXISTS casino_wallets (user_id INTEGER PRIMARY KEY, day TEXT NOT NULL,tokens INTEGER NOT NULL DEFAULT 75 CHECK(tokens>=0 AND tokens<=75), points INTEGER NOT NULL DEFAULT 0 CHECK(points>=0),points_refill_day TEXT,job_refill_day TEXT)",
+  "CREATE TABLE IF NOT EXISTS casino_rounds (id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,game TEXT NOT NULL,state TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1,created_at INTEGER NOT NULL)",
+  "CREATE UNIQUE INDEX IF NOT EXISTS one_live_casino_round ON casino_rounds(user_id,game) WHERE active=1",
+  "CREATE TABLE IF NOT EXISTS casino_stats (user_id INTEGER NOT NULL,stat TEXT NOT NULL,value INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(user_id,stat))",
+  "CREATE TABLE IF NOT EXISTS casino_awards (user_id INTEGER NOT NULL,award TEXT NOT NULL,earned_at INTEGER NOT NULL,PRIMARY KEY(user_id,award))",
+  "CREATE TABLE IF NOT EXISTS casino_requests (user_id INTEGER NOT NULL,request_id TEXT NOT NULL,payload TEXT NOT NULL,result TEXT NOT NULL,PRIMARY KEY(user_id,request_id))",
+  "CREATE TABLE IF NOT EXISTS casino_tables (id INTEGER PRIMARY KEY AUTOINCREMENT,game TEXT NOT NULL,host_id INTEGER NOT NULL,guest_id INTEGER,stake INTEGER NOT NULL,status TEXT NOT NULL,state TEXT NOT NULL,created_at INTEGER NOT NULL,expires_at INTEGER NOT NULL)",
+  "CREATE TABLE IF NOT EXISTS casino_lotteries (day TEXT PRIMARY KEY,status TEXT NOT NULL DEFAULT 'open',pot INTEGER NOT NULL DEFAULT 0,winner_id INTEGER,prize INTEGER NOT NULL DEFAULT 0)",
+  "CREATE TABLE IF NOT EXISTS casino_tickets (id INTEGER PRIMARY KEY AUTOINCREMENT,day TEXT NOT NULL,user_id INTEGER NOT NULL)",
+  "CREATE TABLE IF NOT EXISTS casino_sports (id TEXT PRIMARY KEY,title TEXT NOT NULL,starts_at INTEGER NOT NULL,options TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'open',winner TEXT)",
+  "CREATE TABLE IF NOT EXISTS casino_sports_bets (id INTEGER PRIMARY KEY AUTOINCREMENT,event_id TEXT NOT NULL,user_id INTEGER NOT NULL,selection TEXT NOT NULL,stake INTEGER NOT NULL,odds INTEGER NOT NULL,settled INTEGER NOT NULL DEFAULT 0)"
+ ]) db.run(sql);
+});
+
+// Medical state is additive, leaving existing player records intact.
+db.serialize(() => {
+  db.run(`CREATE TABLE IF NOT EXISTS medical_profiles (
+    user_id INTEGER PRIMARY KEY, blood_type TEXT NOT NULL,
+    accepts_revives INTEGER NOT NULL DEFAULT 1, revive_skill REAL NOT NULL DEFAULT 1,
+    revive_unlocked INTEGER NOT NULL DEFAULT 0, radiation_until INTEGER NOT NULL DEFAULT 0,
+    opium_until INTEGER NOT NULL DEFAULT 0
+  )`);
+  db.run(`CREATE TABLE IF NOT EXISTS faction_medical (
+    gang_id INTEGER PRIMARY KEY, capacity INTEGER NOT NULL DEFAULT 0,
+    effectiveness INTEGER NOT NULL DEFAULT 0, reviver INTEGER NOT NULL DEFAULT 0
   )`);
 });

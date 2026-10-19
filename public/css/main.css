@@ -602,7 +602,7 @@ background:transparent;
 .game-shell #runnerboard .nav { max-width:1260px; }
 .game-shell #runnerboard .nav a { background:transparent; border:0; font-size:12px; padding:3px 12px; }
 .game-shell #siteContainer { max-width:1280px; margin:44px auto 0; border:0; background:#14171b; }
-.game-shell #siteHeader { min-height:138px; background:#191c21; border-bottom:1px solid #34383f; padding:20px; }
+.game-shell #siteHeader { min-height:154px; background:#191c21; border-bottom:1px solid #34383f; padding:20px; }
 .game-shell .playerCard { width:235px; }
 .game-shell .avatarBox { border:1px solid #444; border-radius:8px; }
 .game-shell .statsPanel { top:22px !important; right:20px !important; }
@@ -886,3 +886,24 @@ background:transparent;
 .home-comfort-actions {display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;}
 .chart-legend span:nth-child(4) {color:#b6a0ce;}
 @media(max-width:600px){.training-cards{grid-template-columns:minmax(0,1fr);}.home-comfort-actions .action-button{width:100%;}}
+
+/* City identities and illustrated catalog */
+.starter-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; }
+.starter-card { color:#e5eaf0; background:linear-gradient(150deg,#293a45,#171e27); border:1px solid #47545f; border-radius:8px; padding:16px; cursor:pointer; text-align:center; }
+.starter-card:hover, .starter-card:focus-visible { border-color:#d1b17d; outline:2px solid #d1b17d; outline-offset:2px; }
+.starter-card:disabled { opacity:.5; cursor:wait; }
+.starter-portrait { display:block; position:relative; width:120px; height:143px; margin:0 auto 14px; }
+.starter-portrait img { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; }
+.starter-card strong { display:block; font-size:16px; }
+.starter-card small { display:block; color:#aebbc7; margin:8px 0 16px; }
+@media(max-width:600px) { .starter-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .starter-portrait { width:95px; height:113px; } }
+
+/* Compact sectioned city navigation; player and resource cards stay in the header. */
+.game-shell #leftColumn .city-sidebar{font:12px Arial,sans-serif;padding:0 7px 12px}
+.city-sidebar h2{margin:10px 0 0;padding:6px 9px;background:linear-gradient(#4d4d4d,#1d1d1d);border-radius:5px 5px 0 0;color:#fff;font:bold 12px Arial,sans-serif}
+.city-sidebar a{display:flex;align-items:center;gap:7px;padding:5px 8px;background:#e2e3df;color:#3d4343;border-bottom:1px solid #bec1ba;border-radius:2px;text-decoration:none}
+.city-sidebar a:nth-of-type(even){background:#eceee8}
+.city-sidebar a:hover,.city-sidebar a:focus{background:#cdddbc;color:#222}
+.city-sidebar i{width:16px;text-align:center;font-style:normal;color:#899189}
+.city-sidebar a span{margin-left:auto;color:#55663e}
+@media(max-width:760px){.game-shell #leftColumn .city-sidebar{display:flex;flex-wrap:wrap;gap:3px}.city-sidebar h2{display:none}.city-sidebar a{font-size:11px;padding:6px}}

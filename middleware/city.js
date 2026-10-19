@@ -4,7 +4,7 @@ const aliases = [
   ['/faction-invites','/gang-invites'], ['/my-faction','/my-gang'],
   ['/property','/cell'], ['/citizens','/inmates'], ['/relocate','/transport'],
   ['/factions','/gangs'], ['/faction','/gang'], ['/broker','/warden'],
-  ['/jail','/isolation'], ['/city','/prison'],
+  ['/jail','/isolation'],
 ];
 function cityRoutes(req,res,next) {
   const path=req.path;
