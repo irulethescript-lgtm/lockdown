@@ -1,0 +1,146 @@
+<style>
+.combo-wrap {
+  display:flex; gap:8px; justify-content:center; margin:20px 0;
+}
+.combo-dial {
+  width:52px; height:68px;
+  background:#111; border:2px solid #444;
+  border-radius:3px;
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  cursor:pointer; user-select:none; position:relative;
+  transition:border-color .15s;
+}
+.combo-dial:hover { border-color:#888; }
+.combo-dial .dial-val {
+  font:bold 28px 'Oswald',Arial; color:#ddd; line-height:1;
+}
+.combo-dial .dial-up, .combo-dial .dial-dn {
+  width:100%; text-align:center; font-size:11px; color:#555;
+  padding:2px 0; cursor:pointer; transition:color .1s;
+}
+.combo-dial .dial-up:hover, .combo-dial .dial-dn:hover { color:#aaa; }
+
+.attempt-row { display:flex; gap:6px; margin-bottom:6px; align-items:center; }
+.attempt-digit {
+  width:32px; height:32px;
+  display:flex; align-items:center; justify-content:center;
+  font:bold 15px 'Oswald',Arial; border:2px solid #333; border-radius:2px;
+}
+.attempt-digit.correct { background:#1a4a1a; border-color:#44aa44; color:#88ff88; }
+.attempt-digit.present { background:#4a3a00; border-color:#aa8800; color:#ffcc44; }
+.attempt-digit.wrong   { background:#1a1a1a; border-color:#333;    color:#555; }
+
+.lock-handle {
+  display:inline-block; background:#333; border:2px solid #666;
+  border-radius:4px; padding:10px 30px;
+  font:bold 14px 'Oswald',Arial; color:#ccc; letter-spacing:1px;
+  cursor:pointer; transition:all .15s; margin-top:8px;
+}
+.lock-handle:hover { background:#444; border-color:#aaa; color:#fff; }
+.lock-handle:active { transform:scale(.97); }
+</style>
+
+<div class="page-box">
+  <h2 style="font-family:'Oswald',Arial;letter-spacing:1px;color:#ccc;margin:0 0 2px;">🔓 Raid Property — <%= target.username %></h2>
+  <p style="color:#555;font-size:12px;margin:0 0 16px;">Guess the <%= comboLength %>-digit property combination. Correct position = <span style="color:#88ff88;">green</span>. Right digit wrong place = <span style="color:#ffcc44;">yellow</span>.</p>
+
+  <% if (cdLeft > 0) { %>
+  <div style="background:#1a1a00;border:1px solid #444400;padding:12px 16px;color:#ccaa44;font-size:13px;">
+    ⏳ You must wait <b><%= Math.ceil(cdLeft/60) %> minute<%= Math.ceil(cdLeft/60)!==1?'s':'' %></b> before raiding this property again.
+  </div>
+  <% } else { %>
+
+  <!-- DIALS -->
+  <div class="combo-wrap" id="dialWrap">
+    <% for(let i=0;i<comboLength;i++) { %>
+    <div class="combo-dial" id="dial_<%= i %>">
+      <div class="dial-up" onclick="changeDial(<%= i %>,1)">▲</div>
+      <div class="dial-val" id="dv_<%= i %>">0</div>
+      <div class="dial-dn" onclick="changeDial(<%= i %>,-1)">▼</div>
+    </div>
+    <% } %>
+  </div>
+
+  <div style="text-align:center;">
+    <div class="lock-handle" onclick="submitRaid()">🔒 Try Lock</div>
+  </div>
+
+  <div id="raidMsg" style="display:none;margin-top:14px;padding:10px 14px;font-size:13px;border-radius:2px;text-align:center;"></div>
+
+  <% } %>
+
+  <!-- Previous attempts -->
+  <% if (prevAttempts.length) { %>
+  <div style="margin-top:24px;border-top:1px solid #1a1a1a;padding-top:14px;">
+    <div style="font-size:11px;color:#555;letter-spacing:1px;text-transform:uppercase;margin-bottom:10px;">Previous Attempts</div>
+    <% prevAttempts.forEach(function(a){ %>
+    <% const pos = JSON.parse(a.correct_positions || '[]'); %>
+    <div class="attempt-row">
+      <% a.combo_tried.split('').forEach(function(ch, i){ %>
+      <div class="attempt-digit <%= pos[i]||'wrong' %>"><%= ch %></div>
+      <% }); %>
+      <span style="font-size:11px;color:#555;margin-left:8px;"><%= new Date(a.created_at*1000).toLocaleTimeString() %></span>
+    </div>
+    <% }); %>
+  </div>
+  <% } %>
+
+  <div style="margin-top:20px;font-size:11px;color:#444;line-height:1.7;border-top:1px solid #111;padding-top:12px;">
+    Cost: 10 Nerve &nbsp;·&nbsp; Cooldown: 30 min per target &nbsp;·&nbsp; Getting caught lands you in jail.<br>
+    You can <a href="/property" style="color:#668;">change your own property combo</a> from your property page ($500).
+  </div>
+</div>
+
+<script>
+const comboLen = <%= comboLength %>;
+const vals = Array(comboLen).fill(0);
+
+function changeDial(i, dir) {
+  vals[i] = (vals[i] + dir + 10) % 10;
+  document.getElementById('dv_' + i).textContent = vals[i];
+}
+// Click dial value to cycle up
+document.querySelectorAll('.dial-val').forEach((el, i) => {
+  el.addEventListener('click', () => changeDial(i, 1));
+});
+// Keyboard support
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter') submitRaid();
+});
+
+function submitRaid() {
+  const combo = vals.join('');
+  fetch('/raid/attempt', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ target_id: <%= target.id %>, combo_try: combo })
+  }).then(r=>r.json()).then(d => {
+    const msg = document.getElementById('raidMsg');
+    msg.style.display = 'block';
+    if (d.cracked) {
+      msg.style.background='#002a00'; msg.style.color='#88ff88'; msg.style.border='1px solid #006600';
+      msg.innerHTML = '🔓 <b>CRACKED!</b> ' + d.msg;
+      document.getElementById('dialWrap').style.opacity='0.4';
+      document.querySelector('.lock-handle')?.remove();
+      if (d.user) updateStats(d.user);
+    } else if (d.caught) {
+      msg.style.background='#2a0000'; msg.style.color='#ff8888'; msg.style.border='1px solid #660000';
+      msg.innerHTML = '🚨 <b>CAUGHT!</b> ' + d.msg;
+      if (d.user) updateStats(d.user);
+    } else {
+      msg.style.background='#1a1100'; msg.style.color='#ccaa44'; msg.style.border='1px solid #443300';
+      msg.textContent = d.msg || d.error;
+      if (d.user) updateStats(d.user);
+    }
+    // Show attempt result on dials
+    if (d.correctPos) {
+      d.correctPos.forEach((status, i) => {
+        const dial = document.getElementById('dial_' + i);
+        if (!dial) return;
+        dial.style.borderColor = status==='correct'?'#44aa44':status==='present'?'#aa8800':'#333';
+        dial.querySelector('.dial-val').style.color = status==='correct'?'#88ff88':status==='present'?'#ffcc44':'#666';
+      });
+    }
+    setTimeout(() => location.reload(), 2500);
+  });
+}
+</script>

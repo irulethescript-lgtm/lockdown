@@ -1,0 +1,350 @@
+<h1>The Plastic Surgeon <a class="help" href="#"></a></h1>
+<p style="font-size:11px;color:#888;">The plastic surgeon has a number of tools at his disposal to give you a new look instantly. Unlock new parts from the <a href="#shop" onclick="showShop()" style="color:#cc0000;text-decoration:underline;">Surgeon Shop</a> using Rep points.</p>
+
+<div id="surgeonMsg" style="display:none;margin-bottom:8px;" class="result-box show"></div>
+
+<div id="surgeonWrap" style="display:flex;gap:12px;flex-wrap:wrap;">
+
+  <!-- LEFT: Avatar preview + category buttons -->
+  <div style="flex:0 0 auto;">
+    <!-- Category icon buttons -->
+    <div id="catButtons" style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:6px;max-width:240px;">
+      <% AVATAR_CATEGORIES.forEach(cat => { %>
+      <button class="catBtn <%= cat.id === 'head' ? 'active' : '' %>"
+              title="<%= cat.label %>"
+              onclick="selectCat('<%= cat.id %>')"
+              id="catBtn_<%= cat.id %>">
+        <%= cat.icon %>
+      </button>
+      <% }); %>
+    </div>
+
+    <!-- Avatar preview -->
+    <div id="avatarPreview" style="position:relative;width:160px;height:190px;background:#1a1a1a;border:2px solid #444;margin-bottom:8px;">
+      <% AVATAR_CATEGORIES.forEach(cat => { %>
+      <div class="avatarLayer"
+           id="layer_<%= cat.id %>"
+           style="position:absolute;top:0;left:0;width:100%;height:100%;z-index:<%= cat.zIndex %>;background-size:contain;background-repeat:no-repeat;background-position:center;">
+      </div>
+      <% }); %>
+      <!-- Fallback face if no parts loaded -->
+      <div id="avatarFallback" style="position:absolute;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:4rem;z-index:-1;">🧑</div>
+    </div>
+
+    <!-- Action buttons -->
+    <div style="display:flex;gap:4px;margin-bottom:8px;">
+      <button class="surgeonBtn reset-btn" title="Reset to saved" onclick="resetAvatar()">↩</button>
+      <button class="surgeonBtn random-btn" title="Randomize" onclick="randomizeAvatar()">🎲</button>
+      <button class="surgeonBtn save-btn" title="Save changes" onclick="saveAvatar()">💾</button>
+    </div>
+
+    <!-- Presets -->
+    <div style="font-size:10px;color:#888;margin-bottom:4px;font-family:Arial;">Presets</div>
+    <div style="display:flex;gap:3px;flex-wrap:wrap;">
+      <% for(let i = 1; i <= 5; i++) {
+        const preset = presets.find(p => p.slot === i);
+      %>
+      <div class="presetSlot <%= preset ? '' : 'empty' %>"
+           id="preset_<%= i %>"
+           onclick="<%= preset ? `loadPreset(${i})` : `savePreset(${i})` %>"
+           title="<%= preset ? 'Load preset ' + i : 'Save to slot ' + i %>">
+        <% if (preset) { %>
+          <span style="font-size:1.2rem;">👤</span>
+        <% } else { %>
+          <span style="font-size:1rem;color:#444;">+</span>
+        <% } %>
+      </div>
+      <% } %>
+    </div>
+  </div>
+
+  <!-- RIGHT: Parts selector + shop -->
+  <div style="flex:1;min-width:200px;">
+
+    <!-- Parts grid -->
+    <div id="partsPanel">
+      <div style="font-family:'Oswald',sans-serif;font-size:11px;color:#ccaa00;letter-spacing:1px;margin-bottom:6px;" id="catLabel">HEAD</div>
+      <div id="partsGrid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;max-height:360px;overflow-y:auto;">
+        <!-- Filled by JS -->
+      </div>
+    </div>
+
+    <!-- Info bar -->
+    <div style="margin-top:8px;font-size:10px;color:#666;border-top:1px solid #222;padding-top:6px;">
+      The plastic surgeon has a number of tools at his disposal to give you a new look instantly.
+    </div>
+    <div style="margin-top:6px;display:flex;gap:6px;">
+      <a href="/hospital" class="widebutton" style="font-size:10px;padding:4px 10px;text-decoration:none;">back to hospital</a>
+      <button class="widebutton" style="font-size:10px;padding:4px 10px;" onclick="showShop()">surgeon shop</button>
+    </div>
+  </div>
+</div>
+
+<!-- SURGEON SHOP MODAL -->
+<div id="shopOverlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:9999;overflow-y:auto;">
+  <div style="max-width:600px;margin:40px auto;background:#111;border:2px solid #cc0000;padding:16px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <div style="font-family:'Oswald',sans-serif;font-size:16px;color:#fff;letter-spacing:1px;">SURGEON SHOP</div>
+      <button onclick="hideShop()" style="background:#cc0000;border:none;color:#fff;padding:2px 8px;cursor:pointer;font-size:12px;">✕ Close</button>
+    </div>
+    <p style="font-size:11px;color:#888;margin-bottom:10px;">Spend <span style="color:#ccaa00;">Rep</span> to unlock premium avatar parts permanently. Your current Rep: <strong style="color:#ccaa00;" id="shopRepDisplay"><%= user.rep %></strong></p>
+
+    <% AVATAR_CATEGORIES.forEach(cat => {
+      const shopParts = AVATAR_PARTS[cat.id].filter(p => !p.free);
+      if (!shopParts.length) return;
+    %>
+    <div style="margin-bottom:12px;">
+      <div style="font-family:'Oswald',sans-serif;font-size:11px;color:#ccaa00;border-bottom:1px solid #333;padding-bottom:3px;margin-bottom:6px;"><%= cat.icon %> <%= cat.label.toUpperCase() %></div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;">
+        <% shopParts.forEach(part => {
+          const owned = unlocked.includes(part.key);
+        %>
+        <div class="shopItem <%= owned ? 'owned' : '' %>" id="shopItem_<%= part.key %>">
+          <div class="shopItemImg">
+            <% if (part.img) { %>
+              <img src="<%= part.img %>" style="width:52px;height:62px;object-fit:contain;" onerror="this.style.display='none'">
+            <% } else { %>
+              <span style="font-size:1.5rem;">✨</span>
+            <% } %>
+          </div>
+          <div style="font-size:9px;color:#ccc;text-align:center;margin-top:2px;"><%= part.name %></div>
+          <div style="font-size:9px;color:#ccaa00;text-align:center;"><%= part.rep_cost %> Rep</div>
+          <% if (owned) { %>
+            <div style="font-size:9px;color:#00cc00;text-align:center;margin-top:2px;">✓ Owned</div>
+          <% } else { %>
+            <button class="widebutton" style="width:100%;font-size:9px;margin-top:3px;" onclick="buyPart('<%= part.key %>', <%= part.rep_cost %>, this)">Buy</button>
+          <% } %>
+        </div>
+        <% }); %>
+      </div>
+    </div>
+    <% }); %>
+  </div>
+</div>
+
+<style>
+.catBtn {
+  width:34px; height:34px; font-size:1rem;
+  background:#1a1a1a; border:1px solid #333;
+  cursor:pointer; transition:all 0.1s;
+}
+.catBtn:hover { border-color:#cc0000; background:#2a0000; }
+.catBtn.active { border-color:#cc0000; background:#cc0000; }
+
+.surgeonBtn {
+  width:46px; height:34px; font-size:1rem;
+  background:#1a1a1a; border:1px solid #444; cursor:pointer;
+}
+.surgeonBtn:hover { border-color:#cc0000; }
+
+.partCard {
+  background:#111; border:1px solid #2a2a2a;
+  padding:4px; cursor:pointer; text-align:center;
+  transition:all 0.12s; position:relative;
+}
+.partCard:hover { border-color:#cc0000; background:#1a0000; }
+.partCard.active { border-color:#ccaa00 !important; background:rgba(180,140,0,0.12) !important; }
+.partCard.locked { opacity:0.5; cursor:not-allowed; }
+.partCard.locked:hover { border-color:#555; }
+.partThumb {
+  width:100%; aspect-ratio:1; background:#0d0d0d;
+  display:flex; align-items:center; justify-content:center;
+  overflow:hidden; margin-bottom:3px;
+}
+.partThumb img { width:100%; height:100%; object-fit:contain; }
+.partName { font-size:8px; color:#aaa; font-family:Arial; line-height:1.2; }
+.lockIcon {
+  position:absolute; top:2px; right:2px;
+  font-size:8px; color:#888;
+}
+
+.presetSlot {
+  width:44px; height:52px;
+  background:#111; border:1px solid #333;
+  display:flex; align-items:center; justify-content:center;
+  cursor:pointer; transition:all 0.1s;
+}
+.presetSlot:hover { border-color:#cc0000; }
+.presetSlot.empty { border-style:dashed; }
+
+.shopItem {
+  width:70px; background:#0d0d0d; border:1px solid #2a2a2a;
+  padding:5px; text-align:center;
+}
+.shopItem.owned { border-color:#ccaa00; background:rgba(180,140,0,0.08); }
+.shopItemImg {
+  width:62px; height:70px;
+  background:#111; display:flex; align-items:center; justify-content:center;
+  margin:0 auto 3px;
+}
+</style>
+
+<script>
+// ── Data from server ──
+const PARTS    = <%- JSON.stringify(AVATAR_PARTS) %>;
+const CATS     = <%- JSON.stringify(AVATAR_CATEGORIES) %>;
+const UNLOCKED = <%- JSON.stringify(unlocked) %>;
+const PRESETS_DATA = <%- JSON.stringify(presetsData) %>;
+
+// Current avatar state
+let currentAvatar = <%- JSON.stringify(currentAvatar) %>;
+let savedAvatar   = <%- JSON.stringify(currentAvatar) %>;
+let activeCategory = 'head';
+
+// ── Init ──
+document.addEventListener('DOMContentLoaded', () => {
+  renderLayers();
+  renderParts('head');
+});
+
+// ── Render avatar layers ──
+function renderLayers() {
+  CATS.forEach(cat => {
+    const layerEl = document.getElementById('layer_' + cat.id);
+    if (!layerEl) return;
+    const selectedKey = currentAvatar[cat.id] || 'none';
+    const part = (PARTS[cat.id] || []).find(p => p.key === selectedKey);
+    if (part && part.img) {
+      layerEl.style.backgroundImage = `url('${part.img}')`;
+    } else {
+      layerEl.style.backgroundImage = 'none';
+    }
+  });
+}
+
+// ── Render parts grid ──
+function renderParts(catId) {
+  activeCategory = catId;
+  const parts = PARTS[catId] || [];
+  const grid = document.getElementById('partsGrid');
+  const cat = CATS.find(c => c.id === catId);
+  document.getElementById('catLabel').textContent = cat ? cat.label.toUpperCase() : catId.toUpperCase();
+
+  grid.innerHTML = '';
+  parts.forEach(part => {
+    const isSelected = (currentAvatar[catId] === part.key) ||
+                       (part.key === 'none' && !currentAvatar[catId]);
+    const isLocked = !part.free && !UNLOCKED.includes(part.key);
+    const div = document.createElement('div');
+    div.className = 'partCard' + (isSelected ? ' active' : '') + (isLocked ? ' locked' : '');
+    div.title = isLocked ? `${part.name} — ${part.rep_cost} Rep to unlock` : part.name;
+    div.innerHTML = `
+      <div class="partThumb">
+        ${part.img ? `<img src="${part.img}" onerror="this.parentNode.innerHTML='<span style=font-size:1.5rem>?</span>'">` : '<span style="font-size:1.5rem;color:#333;">∅</span>'}
+      </div>
+      <div class="partName">${part.name}</div>
+      ${isLocked ? '<div class="lockIcon">🔒</div>' : ''}
+    `;
+    if (!isLocked) {
+      div.onclick = () => selectPart(catId, part.key);
+    } else {
+      div.onclick = () => showMsg(`${part.name} costs ${part.rep_cost} Rep. Visit the Surgeon Shop to unlock.`, true);
+    }
+    grid.appendChild(div);
+  });
+}
+
+// ── Select a part ──
+function selectPart(catId, key) {
+  currentAvatar[catId] = key;
+  renderLayers();
+  renderParts(catId);
+}
+
+// ── Select category ──
+function selectCat(catId) {
+  document.querySelectorAll('.catBtn').forEach(b => b.classList.remove('active'));
+  document.getElementById('catBtn_' + catId).classList.add('active');
+  renderParts(catId);
+}
+
+// ── Reset ──
+function resetAvatar() {
+  currentAvatar = JSON.parse(JSON.stringify(savedAvatar));
+  renderLayers();
+  renderParts(activeCategory);
+  showMsg('Reset to saved look.', false);
+}
+
+// ── Randomize ──
+function randomizeAvatar() {
+  const availableParts = {};
+  Object.entries(PARTS).forEach(([cat, parts]) => {
+    const available = parts.filter(p => p.free || UNLOCKED.includes(p.key));
+    if (available.length) availableParts[cat] = available[Math.floor(Math.random() * available.length)].key;
+  });
+  currentAvatar = { ...currentAvatar, ...availableParts };
+  renderLayers();
+  renderParts(activeCategory);
+}
+
+// ── Save ──
+function saveAvatar() {
+  fetch('/surgeon/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ layers: currentAvatar })
+  }).then(r => r.json()).then(d => {
+    if (d.error) showMsg(d.error, true);
+    else { savedAvatar = JSON.parse(JSON.stringify(currentAvatar)); showMsg('Look saved!', false); }
+  });
+}
+
+// ── Presets ──
+function loadPreset(slot) {
+  const data = PRESETS_DATA.find(p => p.slot === slot);
+  if (!data) return;
+  try {
+    const layers = typeof data.layers === 'string' ? JSON.parse(data.layers) : data.layers;
+    currentAvatar = { ...currentAvatar, ...layers };
+    renderLayers();
+    renderParts(activeCategory);
+    showMsg(`Loaded preset ${slot}.`, false);
+  } catch(e) { showMsg('Could not load preset.', true); }
+}
+
+function savePreset(slot) {
+  fetch('/surgeon/preset/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ slot, layers: currentAvatar })
+  }).then(r => r.json()).then(d => {
+    if (d.error) showMsg(d.error, true);
+    else { showMsg(`Saved to preset slot ${slot}!`, false); location.reload(); }
+  });
+}
+
+// ── Shop ──
+function showShop() { document.getElementById('shopOverlay').style.display = 'block'; }
+function hideShop() { document.getElementById('shopOverlay').style.display = 'none'; }
+
+function buyPart(key, cost, btn) {
+  if (!confirm(`Buy this part for ${cost} Rep?`)) return;
+  btn.disabled = true;
+  fetch('/surgeon/buy', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ item_key: key })
+  }).then(r => r.json()).then(d => {
+    if (d.error) { showMsg(d.error, true); btn.disabled = false; }
+    else {
+      UNLOCKED.push(key);
+      document.getElementById('shopRepDisplay').textContent = d.rep;
+      document.getElementById('shopItem_' + key).classList.add('owned');
+      document.getElementById('shopItem_' + key).querySelector('button').outerHTML = '<div style="font-size:9px;color:#00cc00;text-align:center;margin-top:2px;">✓ Owned</div>';
+      showMsg(d.msg, false);
+      renderParts(activeCategory);
+    }
+  });
+}
+
+// ── Status msg ──
+function showMsg(msg, isError) {
+  const el = document.getElementById('surgeonMsg');
+  el.style.display = 'block';
+  el.style.color = isError ? '#ff6666' : '#00cc00';
+  el.style.borderColor = isError ? '#cc0000' : '#00cc00';
+  el.textContent = msg;
+  setTimeout(() => { el.style.display = 'none'; }, 3000);
+}
+</script>

@@ -1,0 +1,34 @@
+<div class="contentBlock">
+  <div class="blockTitle">City Bank</div>
+  <div class="blockBody">
+    <table class="data-table" style="margin-bottom:16px;">
+      <tr><td>Cash on Hand</td><td style="color:#ccaa00;">$<%= formatCash(user.cash) %></td></tr>
+      <tr><td>In Bank</td><td style="color:#00cc00;">$<%= formatCash(user.bank) %></td></tr>
+    </table>
+    <div id="bankMsg"></div>
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+      <div>
+        <div class="blockTitle" style="margin-bottom:6px;">Deposit</div>
+        <div class="form-row-inline">
+          <input type="number" id="depAmt" placeholder="Amount" min="1" style="flex:1;">
+          <button class="btn green" onclick="bankOp('deposit','depAmt')">DEPOSIT</button>
+        </div>
+      </div>
+      <div>
+        <div class="blockTitle" style="margin-bottom:6px;">Withdraw</div>
+        <div class="form-row-inline">
+          <input type="number" id="witAmt" placeholder="Amount" min="1" style="flex:1;">
+          <button class="btn" onclick="bankOp('withdraw','witAmt')">WITHDRAW</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+function bankOp(op, inputId) {
+  const amount = document.getElementById(inputId).value;
+  doAction('/bank/' + op, { amount }, (d) => {
+    document.getElementById('bankMsg').innerHTML = `<div class="success-msg">${esc(d.msg)}</div>`;
+  });
+}
+</script>

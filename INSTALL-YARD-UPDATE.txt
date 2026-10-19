@@ -1,0 +1,58 @@
+LOCKDOWN — TRAVEL YARD UPDATE FOR YOUR EXISTING GAME FOLDER
+
+This download is for the Game folder where your game already works.
+It contains ALL game code, templates, scripts and styles, including routes/auth.js,
+the new Travel Yard and all previous gameplay updates. It reuses the artwork
+already in your Game/public folder. Do not install this into an empty folder.
+
+1. Stop the game: press Ctrl+C in its Command Prompt window.
+2. Back up your existing Game folder.
+3. Right-click lockdown-yard-update.zip and choose Extract All.
+   Set the destination to your existing game folder:
+
+     C:\Users\User\Desktop\Game
+
+   Merge the folders and replace matching files when Windows asks.
+   Keep your existing db folder, public artwork and other files.
+   Do NOT delete the Game folder before extracting.
+   No player database or node_modules folder is included in the ZIP.
+
+4. Check that these files are directly inside your Game folder:
+
+     Game\server.js
+     Game\routes\auth.js
+     Game\middleware\travel.js
+     Game\public\js\travel.js
+     Game\views\yard.ejs
+
+   They must not be nested inside Game\lockdown-yard-update\.
+
+5. In Command Prompt run:
+
+     cd /d C:\Users\User\Desktop\Game
+     npm ci
+     npm start
+
+   Node.js22.20.0 is supported. npm ci installs the correct dependencies
+   for Windows and does not delete your db folder.
+
+6. Open http://localhost:3000 and press Ctrl+F5 to refresh scripts and styles.
+   Click Travel Yard in the sidebar, or visit:
+
+     http://localhost:3000/prison/yard
+
+HOW THE NEW YARD WORKS
+- Pay a round-trip fare and visit another prison (2–12 minutes each way).
+- The timer keeps running when you close the browser or restart the game.
+- Buy exclusive goods after arrival, pack your bag and click Return.
+- Cargo reaches your inventory automatically when you get home.
+- Sell to the collector or trade on Open Market > Collectibles.
+- Discover 10 unique goods for a one-time $1,500 and 5 reputation reward.
+- Bigger bags unlock after 3 and 10 completed trips, plus their upgrade fees.
+- Your home prison, bank, job and cell stay in place.
+- Training, crimes and home trading wait until you return.
+- Return travel is already paid, even if your cash and bag are empty.
+
+Your existing accounts and progress are kept in your existing db folder.
+New tables are added automatically when the updated game starts.
+If you get an error, copy the exact terminal message into this conversation.

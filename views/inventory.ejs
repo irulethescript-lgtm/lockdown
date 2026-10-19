@@ -1,0 +1,117 @@
+<section class="dashboard-panel"><div class="panel-heading"><h2>Travel collectibles · <%= collectibleCount %> owned</h2><a class="text-link" href="/airport#collection">Your collection book →</a></div><p class="panel-intro">Bring home exclusive city goods. Keep them, sell to the collector, or trade with other citizens on the <a href="/openmarket?cat=collectible">collectibles market</a>.</p></section>
+<div class="contentTabs above">
+  <a class="tab" href="/equipment">Armor &amp; Weapons</a>
+  <a class="tab active" href="/inventory">Items &amp; Drugs</a>
+</div>
+
+<div id="invMsg" style="display:none;margin-bottom:8px;" class="result-box show"></div>
+
+<div class="contentBlock">
+  <div class="blockTitle">My Inventory — Items &amp; Drugs</div>
+  <div class="blockBody">
+    <p style="font-size:11px;color:#888;">Shared recovery timers: boosters 15 minutes, drugs and permanent supplements 60 minutes, medical items 5 minutes. A full resource is never wasted: unusable items are kept. Medicine restores HP but does not shorten your hospital sentence. Sell items on the <a href="/openmarket" style="color:#cc0000;">Open Market</a>.</p>
+    <% if (!invItems.length) { %>
+      <p style="color:#666;text-align:center;padding:10px;font-size:11px;">No items. Visit the <a href="/shop" style="color:#cc0000;">Marketplace</a>.</p>
+    <% } else { %>
+    <div class="invGrid">
+      <% invItems.forEach(row => {
+        const item = (row.item_type === 'drug' ? DRUGS : ITEMS)[row.item_key];
+        if (!item) return;
+        const group=recoveryGroup(item,row.item_type); const ready=cooldowns.find(c=>c.category===group.key)?.ready_at||0;
+      %>
+      <div class="invCard">
+        <div class="invQty"><%= row.quantity %></div>
+        <div class="invIcon"><img src="<%= item.img || '/amenities/default.png' %>" style="width:36px;height:44px;object-fit:contain;" onerror="this.src='/amenities/default.png'"></div>
+        <div class="invName"><%= item.name %></div>
+        <div class="invDesc"><%= item.desc %></div>
+        <small class="recovery-timer" data-ready="<%= ready %>"><%= group.label %> · <%= group.duration / 60 %>m recovery</small>
+        <div class="invBtns">
+          <button class="invBtn use-btn" onclick="useItem('<%= row.item_key %>','<%= row.item_type %>',this)">USE</button>
+          <button class="invBtn sell-btn" onclick="listItem('<%= row.item_key %>','<%= row.item_type %>',this)">LIST</button>
+          <button class="invBtn drop-btn" onclick="dropItem('<%= row.item_key %>','<%= row.item_type %>',this)">✕</button>
+        </div>
+      </div>
+      <% }); %>
+    </div>
+    <% } %>
+  </div>
+</div>
+
+<div class="returnlink"><a href="/city">back to city hall</a></div>
+
+<style>
+.contentTabs { display:flex; margin-bottom:0; }
+.contentTabs .tab {
+  display:inline-block; padding:5px 14px;
+  background:#222; border:1px solid #555; border-bottom:none;
+  color:#aaa; font-size:11px; margin-right:2px; text-decoration:none;
+}
+.contentTabs .tab.active { background:#cc0000; color:#fff; border-color:#cc0000; }
+.invGrid { display:grid; grid-template-columns:repeat(4,1fr); gap:4px; }
+.invCard {
+  background:#0d0d0d; border:1px solid #2a2a2a; padding:4px;
+  text-align:center; position:relative;
+}
+.invQty {
+  position:absolute; top:2px; left:2px;
+  background:#333; color:#fff; font-size:9px; padding:1px 4px;
+}
+.invIcon { font-size:1.8rem; margin:4px 0 2px; }
+.invName { font-size:9px; color:#ccc; margin-bottom:2px; font-family:Arial; line-height:1.2; }
+.invDesc { font-size:8px; color:#00aa00; margin-bottom:4px; }
+.invBtns { display:flex; gap:2px; justify-content:center; }
+.invBtn { width:28px; height:18px; font-size:8px; font-weight:bold; border:none; cursor:pointer; }
+.use-btn  { background:#2a5a2a; color:#0f0; }
+.sell-btn { background:#1a3a5a; color:#0af; }
+.drop-btn { background:#5a1a1a; color:#f44; }
+.invBtn:hover { opacity:0.8; }
+</style>
+
+<script>
+function refreshRecovery() {
+  document.querySelectorAll('[data-ready]').forEach(timer => {
+    const remaining=Math.max(0,Number(timer.dataset.ready)-Math.floor(Date.now()/1000));
+    const button=timer.nextElementSibling.querySelector('.use-btn');
+    if (remaining) { timer.textContent=`Ready in ${Math.ceil(remaining/60)}m`; button.disabled=true; }
+    else if (button.dataset.cooling) { button.disabled=false; }
+    button.dataset.cooling=remaining ? 'true' : '';
+  });
+}
+refreshRecovery(); setInterval(refreshRecovery,1000);
+function useItem(key, type, btn) {
+  btn.disabled = true;
+  fetch('/inventory/use', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ item_key:key, item_type:type })
+  }).then(r=>r.json()).then(d=>{
+    if (d.error) { showMsg(d.error, true); btn.disabled=false; }
+    else { showMsg(d.msg, false); if(d.user) updateStats(d.user); setTimeout(()=>location.reload(),800); }
+  });
+}
+function listItem(key, type, btn) {
+  const price = prompt('Set your listing price ($):');
+  if (!price || isNaN(price)) return;
+  fetch('/inventory/list', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({ item_key:key, item_type:type, price:parseInt(price) })
+  }).then(r=>r.json()).then(d=>{
+    if (d.error) showMsg(d.error, true);
+    else { showMsg(d.msg, false); setTimeout(()=>location.reload(),800); }
+  });
+}
+function dropItem(key, type, btn) {
+  if (!confirm('Drop this item? It will be gone forever.')) return;
+  fetch('/inventory/drop', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({ item_key:key, item_type:type })
+  }).then(r=>r.json()).then(d=>{
+    if (d.ok) location.reload(); else showMsg(d.error, true);
+  });
+}
+function showMsg(msg, isError) {
+  const el = document.getElementById('invMsg');
+  el.style.display='block';
+  el.style.color = isError ? '#ff6666' : '#00cc00';
+  el.style.borderColor = isError ? '#cc0000' : '#00cc00';
+  el.textContent = msg;
+}
+</script>

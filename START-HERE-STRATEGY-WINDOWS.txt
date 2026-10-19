@@ -1,0 +1,57 @@
+LOCKDOWN — STRATEGY UPDATE, COMPLETE GAME FOR WINDOWS
+
+This is the complete updated game, including original routes, middleware,
+views and all artwork. It includes the new crime, course, combat and recovery systems.
+The download is divided into THREE normal ZIP files to fit attachment limits.
+Each ZIP contains a different set of files. You need all three.
+
+1. STOP THE GAME AND KEEP A BACKUP
+   Press Ctrl+C in the terminal running the game.
+   Copy your existing Game folder somewhere safe.
+   If you already have player accounts, KEEP your existing db folder.
+   No databases or player data are included in these downloads.
+
+2. DOWNLOAD ALL THREE ZIPS
+   lockdown-strategy-1.zip
+   lockdown-strategy-2.zip
+   lockdown-strategy-3.zip
+
+3. EXTRACT ALL THREE INTO THE SAME GAME FOLDER
+   In Windows, right-click each ZIP and choose Extract All.
+   For EACH ZIP, set the destination to:
+
+     C:\Users\User\Desktop\Game
+
+   Use that SAME destination for all three ZIPs. Merge folders and replace
+   matching files when Windows asks. Keep existing files that are not included.
+   Do not create separate part-1, part-2 or part-3 folders inside Game.
+
+   After extraction, these files must exist:
+     C:\Users\User\Desktop\Game\server.js
+     C:\Users\User\Desktop\Game\routes\auth.js
+     C:\Users\User\Desktop\Game\routes\game.js
+     C:\Users\User\Desktop\Game\middleware\db.js
+     C:\Users\User\Desktop\Game\views\login.ejs
+
+4. INSTALL AND START
+   Your Node.js v22.20.0 meets the dependencies' Node version requirement.
+   Open Command Prompt and run these three lines:
+
+     cd /d C:\Users\User\Desktop\Game
+     npm ci
+     npm start
+
+   npm ci replaces installed dependencies with the versions from package-lock.json
+   for your operating system. It does not delete your db folder.
+   Leave the terminal open and visit:
+
+     http://localhost:3000
+
+   If you have no existing db folder, the game creates a new one.
+   If you kept your existing db folder, it uses those accounts and progress.
+
+IF SOMETHING GOES WRONG
+   Copy the new terminal error into the conversation.
+   If styles look old, press Ctrl+F5 in the browser.
+
+OPTIONAL: Run the gameplay tests with npm test.

@@ -1,0 +1,245 @@
+<div class="contentTabs above">
+  <a class="tab active" href="/equipment">Armor &amp; Weapons</a>
+  <a class="tab" href="/inventory">Items &amp; Drugs</a>
+</div>
+
+<div id="equipMsg" style="display:none;margin-bottom:8px;" class="result-box show"></div>
+
+<div class="contentBlock">
+  <div class="blockTitle">My Equipment</div>
+  <div class="blockBody">
+    <p style="font-size:11px;color:#888;">Adding armor and weapons will increase your attack and defense. You can only equip one armor, one weapon and one gear at a time.</p>
+    <div style="display:flex;gap:16px;align-items:flex-start;margin-top:10px;">
+      <!-- Avatar placeholder -->
+      <div style="width:80px;height:100px;background:#111;border:1px solid #333;display:flex;align-items:center;justify-content:center;font-size:2.5rem;">🧑</div>
+      <!-- Slots -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;flex:1;">
+        <div class="equipSlot" id="slot_weapon">
+          <div class="slotLabel">Weapon 🔴</div>
+          <% if (equipped.weapon) { %>
+            <div class="slotItem">
+              <img src="<%= WEAPONS[equipped.weapon] ? (WEAPONS[equipped.weapon].img || '/amenities/default.png') : '/amenities/default.png' %>" style="width:36px;height:44px;object-fit:contain;" onerror="this.src='/amenities/default.png'">
+              <span style="font-size:10px;color:#ccc;"><%= WEAPONS[equipped.weapon] ? WEAPONS[equipped.weapon].name : equipped.weapon %></span>
+            </div>
+            <button class="widebutton" style="width:100%;margin-top:4px;font-size:10px;" onclick="unequip('weapon')">Unequip</button>
+          <% } else { %>
+            <div style="color:#555;font-size:10px;text-align:center;padding:10px;">Empty</div>
+          <% } %>
+        </div>
+        <div class="equipSlot" id="slot_armor">
+          <div class="slotLabel">Armor 🔴</div>
+          <% if (equipped.armor) { %>
+            <div class="slotItem">
+              <img src="<%= ARMOR[equipped.armor] ? (ARMOR[equipped.armor].img || '/amenities/default.png') : '/amenities/default.png' %>" style="width:36px;height:44px;object-fit:contain;" onerror="this.src='/amenities/default.png'">
+              <span style="font-size:10px;color:#ccc;"><%= ARMOR[equipped.armor] ? ARMOR[equipped.armor].name : equipped.armor %></span>
+            </div>
+            <button class="widebutton" style="width:100%;margin-top:4px;font-size:10px;" onclick="unequip('armor')">Unequip</button>
+          <% } else { %>
+            <div style="color:#555;font-size:10px;text-align:center;padding:10px;">Empty</div>
+          <% } %>
+        </div>
+        <div class="equipSlot" id="slot_gear" style="grid-column:1;">
+          <div class="slotLabel">Gear 🔴</div>
+          <% if (equipped.gear) { %>
+            <div class="slotItem">
+              <img src="<%= GEAR[equipped.gear] ? (GEAR[equipped.gear].img || '/amenities/default.png') : '/amenities/default.png' %>" style="width:36px;height:44px;object-fit:contain;" onerror="this.src='/amenities/default.png'">
+              <span style="font-size:10px;color:#ccc;"><%= GEAR[equipped.gear] ? GEAR[equipped.gear].name : equipped.gear %></span>
+            </div>
+            <button class="widebutton" style="width:100%;margin-top:4px;font-size:10px;" onclick="unequip('gear')">Unequip</button>
+          <% } else { %>
+            <div style="color:#555;font-size:10px;text-align:center;padding:10px;">Empty</div>
+          <% } %>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- My Weapons -->
+<div class="contentBlock">
+  <div class="blockTitle">My Weapons</div>
+  <div class="blockBody">
+    <% if (!invWeapons.length) { %>
+      <p style="color:#666;text-align:center;font-size:11px;">No weapons. Visit the <a href="/shop" style="color:#cc0000;">Marketplace</a>.</p>
+    <% } else { %>
+    <div class="invGrid">
+      <% invWeapons.forEach(row => {
+        const item = WEAPONS[row.item_key];
+        if (!item) return;
+        const isEquipped = equipped.weapon === row.item_key;
+      %>
+      <div class="invCard <%= isEquipped ? 'equipped' : '' %>">
+        <div class="invQty"><%= row.quantity %></div>
+        <div class="invIcon"><img src="<%= item.img || '/amenities/default.png' %>" style="width:36px;height:44px;object-fit:contain;" onerror="this.src='/amenities/default.png'"></div>
+        <div class="invName"><%= item.name %></div>
+        <div class="invDesc"><%= item.desc %></div>
+        <div class="invBtns">
+          <% if (isEquipped) { %>
+            <button class="invBtn equipped-btn" onclick="unequip('weapon')">E</button>
+          <% } else { %>
+            <button class="invBtn equip-btn" onclick="equipItem('weapon','<%= row.item_key %>')">E</button>
+          <% } %>
+          <button class="invBtn sell-btn" onclick="sellItem('<%= row.item_key %>','weapon',this)">$</button>
+          <button class="invBtn drop-btn" onclick="dropItem('<%= row.item_key %>','weapon',this)">✕</button>
+        </div>
+      </div>
+      <% }); %>
+    </div>
+    <% } %>
+  </div>
+</div>
+
+<!-- My Armor -->
+<div class="contentBlock">
+  <div class="blockTitle">My Armor</div>
+  <div class="blockBody">
+    <% if (!invArmor.length) { %>
+      <p style="color:#666;text-align:center;font-size:11px;">No armor. Visit the <a href="/shop" style="color:#cc0000;">Marketplace</a>.</p>
+    <% } else { %>
+    <div class="invGrid">
+      <% invArmor.forEach(row => {
+        const item = ARMOR[row.item_key];
+        if (!item) return;
+        const isEquipped = equipped.armor === row.item_key;
+      %>
+      <div class="invCard <%= isEquipped ? 'equipped' : '' %>">
+        <div class="invQty"><%= row.quantity %></div>
+        <div class="invIcon"><img src="<%= item.img || '/amenities/default.png' %>" style="width:36px;height:44px;object-fit:contain;" onerror="this.src='/amenities/default.png'"></div>
+        <div class="invName"><%= item.name %></div>
+        <div class="invDesc"><%= item.desc %></div>
+        <div class="invBtns">
+          <% if (isEquipped) { %>
+            <button class="invBtn equipped-btn" onclick="unequip('armor')">E</button>
+          <% } else { %>
+            <button class="invBtn equip-btn" onclick="equipItem('armor','<%= row.item_key %>')">E</button>
+          <% } %>
+          <button class="invBtn sell-btn" onclick="sellItem('<%= row.item_key %>','armor',this)">$</button>
+          <button class="invBtn drop-btn" onclick="dropItem('<%= row.item_key %>','armor',this)">✕</button>
+        </div>
+      </div>
+      <% }); %>
+    </div>
+    <% } %>
+  </div>
+</div>
+
+<!-- My Gear -->
+<div class="contentBlock">
+  <div class="blockTitle">My Gear</div>
+  <div class="blockBody">
+    <% if (!invGear.length) { %>
+      <p style="color:#666;text-align:center;font-size:11px;">No gear. Visit the <a href="/shop" style="color:#cc0000;">Marketplace</a>.</p>
+    <% } else { %>
+    <div class="invGrid">
+      <% invGear.forEach(row => {
+        const item = GEAR[row.item_key];
+        if (!item) return;
+        const isEquipped = equipped.gear === row.item_key;
+      %>
+      <div class="invCard <%= isEquipped ? 'equipped' : '' %>">
+        <div class="invQty"><%= row.quantity %></div>
+        <div class="invIcon"><img src="<%= item.img || '/amenities/default.png' %>" style="width:36px;height:44px;object-fit:contain;" onerror="this.src='/amenities/default.png'"></div>
+        <div class="invName"><%= item.name %></div>
+        <div class="invDesc"><%= item.desc %></div>
+        <div class="invBtns">
+          <% if (isEquipped) { %>
+            <button class="invBtn equipped-btn" onclick="unequip('gear')">E</button>
+          <% } else { %>
+            <button class="invBtn equip-btn" onclick="equipItem('gear','<%= row.item_key %>')">E</button>
+          <% } %>
+          <button class="invBtn sell-btn" onclick="sellItem('<%= row.item_key %>','gear',this)">$</button>
+          <button class="invBtn drop-btn" onclick="dropItem('<%= row.item_key %>','gear',this)">✕</button>
+        </div>
+      </div>
+      <% }); %>
+    </div>
+    <% } %>
+  </div>
+</div>
+
+<div class="returnlink"><a href="/city">back to city hall</a></div>
+
+<style>
+.contentTabs { display:flex; margin-bottom:0; }
+.contentTabs .tab {
+  display:inline-block; padding:5px 14px;
+  background:#222; border:1px solid #555; border-bottom:none;
+  color:#aaa; font-size:11px; margin-right:2px; text-decoration:none;
+}
+.contentTabs .tab.active { background:#cc0000; color:#fff; border-color:#cc0000; }
+
+.equipSlot {
+  background:#111; border:1px solid #333; padding:8px; text-align:center;
+}
+.slotLabel { font-size:10px; color:#888; margin-bottom:4px; font-family:Arial; }
+.slotItem { display:flex; flex-direction:column; align-items:center; gap:2px; }
+
+.invGrid { display:grid; grid-template-columns:repeat(4,1fr); gap:4px; }
+.invCard {
+  background:#0d0d0d; border:1px solid #2a2a2a; padding:4px;
+  text-align:center; position:relative;
+}
+.invCard.equipped { border-color:#ccaa00; background:rgba(180,140,0,0.1); }
+.invQty {
+  position:absolute; top:2px; left:2px;
+  background:#333; color:#fff; font-size:9px;
+  padding:1px 4px; min-width:14px; text-align:center;
+}
+.invIcon { font-size:1.8rem; margin:4px 0 2px; }
+.invName { font-size:9px; color:#ccc; margin-bottom:2px; font-family:Arial; line-height:1.2; }
+.invDesc { font-size:8px; color:#00aa00; margin-bottom:4px; }
+.invBtns { display:flex; gap:2px; justify-content:center; }
+.invBtn {
+  width:22px; height:18px; font-size:9px; font-weight:bold;
+  border:none; cursor:pointer; font-family:Arial;
+}
+.equip-btn   { background:#2a5a2a; color:#0f0; }
+.equipped-btn{ background:#ccaa00; color:#000; }
+.sell-btn    { background:#1a3a5a; color:#0af; }
+.drop-btn    { background:#5a1a1a; color:#f44; }
+.invBtn:hover { opacity:0.8; }
+</style>
+
+<script>
+function equipItem(slot, key) {
+  doEquip({ action:'equip', slot, key });
+}
+function unequip(slot) {
+  doEquip({ action:'unequip', slot });
+}
+function doEquip(body) {
+  fetch('/equipment/equip', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)
+  }).then(r=>r.json()).then(d=>{
+    if (d.error) showMsg(d.error, true);
+    else { showMsg(d.msg, false); setTimeout(()=>location.reload(), 600); }
+  });
+}
+function sellItem(key, type, btn) {
+  const price = prompt('List price? (50% goes to you immediately)');
+  if (!price) return;
+  fetch('/inventory/sell', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({ item_key:key, item_type:type, price:parseInt(price)||0 })
+  }).then(r=>r.json()).then(d=>{
+    if (d.error) showMsg(d.error, true);
+    else { showMsg(d.msg, false); setTimeout(()=>location.reload(), 800); }
+  });
+}
+function dropItem(key, type, btn) {
+  if (!confirm('Drop this item? It will be lost forever.')) return;
+  fetch('/inventory/drop', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({ item_key:key, item_type:type })
+  }).then(r=>r.json()).then(d=>{
+    if (d.ok) location.reload(); else showMsg(d.error, true);
+  });
+}
+function showMsg(msg, isError) {
+  const el = document.getElementById('equipMsg');
+  el.style.display='block';
+  el.style.color = isError ? '#ff6666' : '#00cc00';
+  el.style.borderColor = isError ? '#cc0000' : '#00cc00';
+  el.textContent = msg;
+}
+</script>
